@@ -1,0 +1,17 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "xhanio",
+  "description": "Zen self-hosted knowledge tool — channel plugin + skills.",
+  "owner": {
+    "name": "xhanio",
+    "email": "hanx.azure22@gmail.com"
+  },
+  "plugins": [
+    {
+      "name": "zen",
+      "description": "Zen channel + skills + zen-mcp HTTP reference.",
+      "category": "productivity",
+      "source": "./zen"
+    }
+  ]
+}

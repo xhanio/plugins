@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "zen-channel": {
+      "command": "zen-channel"
+    },
+    "zen": {
+      "type": "http",
+      "url": "http://localhost:38000/api/v1/mcp"
+    }
+  }
+}
