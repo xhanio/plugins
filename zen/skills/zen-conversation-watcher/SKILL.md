@@ -1,13 +1,15 @@
 ---
 name: zen-conversation-watcher
-description: Use when handling <channel source="zen"> events arriving in this Claude Code session. Describes the event-response decision tree, the reply-after-mutation audit rule, and the anchor-bounded action scope. Active automatically when this plugin is installed and the session was started with --channels plugin:zen@xhanio.
+description: Use when handling <channel source="zen"> events arriving in this Claude Code session. Describes the event-response decision tree, the reply-after-mutation audit rule, and the anchor-bounded action scope. Active automatically when this plugin is installed and the session was started with --dangerously-load-development-channels plugin:zen@xhanio.
 ---
 
 # Zen Conversation Watcher (channel mode)
 
 ## Overview
 
-When Claude Code is started with `--channels plugin:zen@xhanio`, the
+When Claude Code is started with `--dangerously-load-development-channels
+plugin:zen@xhanio` (channels are still a research preview, so that flag is what
+registers one — passed alone, never alongside `--channels`), the
 `zen-channel` MCP server inside this plugin pushes every Zen SPA user
 message into my context as a `<channel source="zen" …>` event. This skill is
 the recipe for responding to those events well.
@@ -28,7 +30,7 @@ the recipe for responding to those events well.
 
 Events are addressed to one session, not broadcast. Each event carries a
 target session id and a subscriber drops anything not addressed to it, so
-running several `--channels plugin:zen` sessions against one backend does
+running several channel-enabled sessions against one backend does
 **not** produce duplicate replies — each session only sees its own turns. If
 a second channel registers the *same* session id, the older one is displaced
 and stops (`ErrDisplaced`), so a stale process can't answer either.
@@ -140,7 +142,8 @@ its content. Pure greetings or short follow-ups don't.
 ## Termination
 
 Channel mode is per-session. To stop watching, exit Claude Code; restart
-without `--channels` to use Zen tools without receiving events.
+without the channel flag (a bare `claude`, bypassing the installer's alias with
+`\claude`) to use Zen tools without receiving events.
 
 ## Common mistakes
 

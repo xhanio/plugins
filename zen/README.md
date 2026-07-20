@@ -15,13 +15,12 @@ backend and the `zen-channel` binary on your `$PATH`.
 
 ## Install Zen
 
-The all-in-one image carries its own installer. Extract and run it — it pulls
-the image, starts Zen at `http://localhost:38000`, and drops the matching
-`zen-channel` binary on your `$PATH`:
+One installer does the whole job — it pulls the image, starts Zen at
+`http://localhost:38000`, drops the matching `zen-channel` binary on your
+`$PATH`, and installs this plugin into Claude Code:
 
 ```bash
-docker run --rm --entrypoint cat \
-  docker.io/xhanio/zen-allinone:latest /app/install.sh > zen-install.sh
+curl -fsSL https://raw.githubusercontent.com/xhanio/zen/main/scripts/install.sh -o zen-install.sh
 bash zen-install.sh          # installs to ~/zen; pass a directory to change it
 ```
 
@@ -53,18 +52,37 @@ Swap the filename for your host: `zen-channel_darwin_amd64` (Intel Mac),
 
 ## Add the plugin to Claude Code
 
-With Zen running, add the marketplace and install the plugin:
+The installer above already did this. To do it by hand — or on a machine where
+Zen itself runs elsewhere — add the marketplace and install the plugin:
 
 ```
-/plugin marketplace add github.com/xhanio/plugins
+/plugin marketplace add https://github.com/xhanio/plugins
 /plugin install zen@xhanio
 ```
 
 Then restart with the channel enabled:
 
 ```
-claude --channels plugin:zen@xhanio
+claude --dangerously-load-development-channels plugin:zen@xhanio
 ```
+
+Channels are still a research preview, so this is the only flag that registers
+one today. Pass it **alone** — do not also pass `--channels plugin:zen@xhanio`.
+Claude Code resolves a server to its channel entry first-match-wins, and
+`--channels` appends a non-dev entry ahead of the dev one, so the lookup returns
+the non-dev entry and the plugin is rejected as "not on the approved channels
+allowlist" — the very error the dev flag exists to bypass. (When channels
+graduate from preview, plain `--channels` becomes the right flag.)
+
+Accept the "Loading development channels" warning at startup: it blocks MCP
+init, so nothing registers until you do. To confirm, launch with `--debug` and
+look for `Channel notifications registered` rather than `… skipped`.
+
+The installer adds a `claude` alias carrying this flag to your shell rc, so a
+plain `claude` does the right thing. Without it — or without the flag — the
+plugin still loads its skills and MCP tools, but Zen chat messages never reach
+your session. Note the flag is ignored in non-interactive mode (`claude -p`),
+so headless sessions cannot use the channel at all.
 
 ## Configure
 
@@ -74,9 +92,15 @@ by default. Zen is self-hosted on this machine, so the host is always
 port other than 38000, point `ZEN_BACKEND_URL` at it:
 
 ```bash
-export ZEN_BACKEND_URL=http://localhost:8000
-claude --channels plugin:zen@xhanio
+export ZEN_BACKEND_URL=http://localhost:18000   # whatever port you published
+claude --dangerously-load-development-channels plugin:zen@xhanio
 ```
+
+This covers the channel push only. The `zen` HTTP MCP server is pinned
+separately in this plugin's `.mcp.json` (`http://localhost:38000/api/v1/mcp`),
+and `ZEN_BACKEND_URL` does not move it — on a non-default port you get chat
+events but the card/search tools fail to connect. Publishing Zen on 38000 is
+the path with no sharp edges.
 
 ## What's inside
 

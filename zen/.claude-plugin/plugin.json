@@ -1,6 +1,6 @@
 {
   "name": "zen",
   "description": "Zen self-hosted knowledge tool — channel push + reply tool + bundled skills + reference to the zen-mcp HTTP server.",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "keywords": ["zen", "knowledge", "conversation", "channel", "mcp", "self-hosted"]
 }
