@@ -215,13 +215,13 @@ zen-mcp must be wired into Claude Code first. If the tool names below aren't in 
 | Search before write | `search(query, scope?, limit?)` | Excludes soft-deleted cards |
 | Get a card | `card.get(id)` | Works on soft-deleted cards too |
 | List cards | `card.list({group_id?, include_trashed?})` | Default excludes soft-deleted |
-| Create card | `card.create(title, content, group_id, {tags?, summary?, level_entry_id?, genesis?, parent_card_id?, source_conversation_id?, format?, reference?})` | Returns Card. Level via `level_entry_id` (a catalog-entry ULID), not a number |
-| Update card | `card.update(id, {title?, content?, summary?, level_entry_id?, clear_level_entry?, genesis?, group_id?, position?, tags?, format?})` | `tags` (non-nil) REPLACES the whole set; `clear_level_entry: true` detaches the level |
+| Create card | `card.create(title, content, group_id, {tags?, summary?, level_entry_id?, genesis?, parent_card_id?, source_conversation_id?, format?, reference?, conversation_id?})` | Returns Card. Level via `level_entry_id` (a catalog-entry ULID), not a number. `conversation_id` files the change under the conversation that caused it — pass it when acting on a channel event; it is NOT the same as `source_conversation_id` (the card's origin) |
+| Update card | `card.update(id, {title?, content?, summary?, level_entry_id?, clear_level_entry?, genesis?, group_id?, position?, tags?, format?, conversation_id?})` | `tags` (non-nil) REPLACES the whole set; `clear_level_entry: true` detaches the level; `conversation_id` attributes the edit to the conversation that caused it |
 | Soft-delete a card | `card.delete(id)` | Moves to Trash; recoverable |
 | Restore a soft-deleted card | `card.restore(id)` | Errors if card is live |
 | Hard-delete a soft-deleted card | `card.purge(id)` | Errors if card is live (must soft-delete first) |
 | List soft-deleted cards | `trash.list({limit?})` | Ordered by deleted_at descending |
-| Decompose a card | `decompose(parent_card_id, cards[], {container_content?})` | Parent stays live as the cleared container; children carry parent_card_id |
+| Decompose a card | `decompose(parent_card_id, cards[], {container_content?, conversation_id?})` | Parent stays live as the cleared container; children carry parent_card_id. Pass `conversation_id` when a conversation drove the split — decompose clears the parent's body, and that snapshot is the only record of the text it held |
 | Compose N cards into 1 | `compose(source_card_ids, target)` | Inverse of decompose; soft-deletes all sources; target.genesis defaults to "Composed from &lt;titles&gt;" |
 | Anchor a derivation (back-fill) | `reference.create(source_card_id, derived_card_id, conversation_id, selection_text)` | Returns Reference. For most cases use the inline reference on card.create instead. |
 | Get a reference | `reference.get(id)` | Returns Reference. |

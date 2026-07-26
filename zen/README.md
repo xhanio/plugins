@@ -96,11 +96,34 @@ export ZEN_BACKEND_URL=http://localhost:18000   # whatever port you published
 claude --dangerously-load-development-channels plugin:zen@xhanio
 ```
 
-This covers the channel push only. The `zen` HTTP MCP server is pinned
-separately in this plugin's `.mcp.json` (`http://localhost:38000/api/v1/mcp`),
-and `ZEN_BACKEND_URL` does not move it — on a non-default port you get chat
-events but the card/search tools fail to connect. Publishing Zen on 38000 is
-the path with no sharp edges.
+That covers the channel push. The `zen` HTTP MCP server — the card, search and
+group tools — is configured separately, because it is a different process
+reached over HTTP rather than the backend's WS fan-out. It defaults to
+`http://localhost:38000/api/v1/mcp` and moves with `ZEN_MCP_URL`:
+
+```bash
+export ZEN_BACKEND_URL=http://localhost:18000       # channel → backend
+export ZEN_MCP_URL=http://localhost:18000/api/v1/mcp # tools → MCP endpoint
+claude --dangerously-load-development-channels plugin:zen@xhanio
+```
+
+Set both, or the halves disagree: chat events arrive from one Zen while the
+card tools edit another.
+
+### Pointing the plugin at a dev checkout
+
+Running Zen from source splits what the all-in-one image serves behind one
+port: `zen-backend` on `:8080` and `zen-mcp` on `:8081`. `make dev` starts
+both (plus Vite), and these two variables aim a session at them:
+
+```bash
+export ZEN_BACKEND_URL=http://127.0.0.1:8080
+export ZEN_MCP_URL=http://127.0.0.1:8081/api/v1/mcp
+claude --dangerously-load-development-channels plugin:zen@xhanio
+```
+
+Your installed Zen on 38000 keeps running untouched — this only changes where
+one Claude session looks.
 
 ## What's inside
 

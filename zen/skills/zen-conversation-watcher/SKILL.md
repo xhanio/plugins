@@ -73,14 +73,22 @@ and stops (`ErrDisplaced`), so a stale process can't answer either.
 2. **Reply after every mutation.** Every `card.update` or `card.create`
    triggered by a conversation message MUST be followed by `reply` with a
    short summary and a markdown link to the changed card (`[…](/c/<id>)`).
-   This is the audit trail in the conversation thread.
-3. **Actions stay anchor-bounded.** Mutations target either the
+   This is the audit trail in the conversation thread — and the SPA refreshes
+   a thread's snapshot records when a message arrives, so skipping the reply
+   also leaves the edits invisible until the user reopens the conversation.
+3. **Pass `conversation_id` on every mutation.** Any `card.update`,
+   `card.create`, or `decompose` triggered by a channel event MUST carry that
+   event's `conversation_id`. It is what files the change under the
+   conversation that caused it; without it the edit is recorded as an
+   unattributed agent edit and never appears in the thread. It does not change
+   the card's own `source_conversation_id` — that stays the card's origin.
+4. **Actions stay anchor-bounded.** Mutations target either the
    conversation's anchor entity or extend it with a derived child card. I
    don't edit unrelated entities from inside a conversation thread.
-4. **Standalone conversations (no anchor)** default to Shape 1. Shape 2
+5. **Standalone conversations (no anchor)** default to Shape 1. Shape 2
    doesn't apply (nothing to edit in place). Shape 3 only when the user
    explicitly asks me to create something.
-5. **Group-anchored conversations** (`anchor_kind="group"`) have no body to
+6. **Group-anchored conversations** (`anchor_kind="group"`) have no body to
    edit, so Shape 2 doesn't apply. Answer (Shape 1), or create a card in
    that group (Shape 3, `group_id=anchor_id`, no `parent_card_id` — a group
    is not a parent card). Link a group as `[…](/g/<id>)`.
@@ -150,6 +158,7 @@ without the channel flag (a bare `claude`, bypassing the installer's alias with
 | Mistake | Fix |
 |---|---|
 | Mutating without follow-up `reply` | "Do thing then reply" pattern — never let a `card.update` ship alone. |
+| Mutating without `conversation_id` | The edit lands as an unattributed agent edit and never shows in the thread. Pass the channel event's `conversation_id` every time. |
 | Acting on an ambiguous request | Reply with a clarifying question first; the next event is the answer. |
 | Editing entities unrelated to the conversation's anchor | Stay anchor-bounded. If the user wants to change something else, they'll start a separate conversation. |
 | Reaching for `document.*` tools, or linking `/d/<id>` | See "Documents are cards" below — every document is a card and is addressed as one. |
