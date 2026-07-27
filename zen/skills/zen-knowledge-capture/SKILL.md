@@ -165,17 +165,21 @@ Symmetric inverse of decompose: merge N existing Cards into 1 target Card by **l
 
 ## Anchoring derivations with references
 
-When you create a card derived from a user's text selection in another card, **anchor the reference inline on `card.create`**:
+When you create a card derived from a user's text selection in another card, **anchor the reference inline on `card.create`** — and when that selection came from a Zen UI drag, pass the **`message_id`** rather than the excerpt:
 
 ```
 card.create(
   title=..., content=..., group_id=...,
   parent_card_id=<source>, source_conversation_id=<conv>,
-  reference={selection_text: "<verbatim text>"}
+  reference={message_id: "<the channel event's message_id>"}
 )
 ```
 
-The selection text must be the **verbatim** excerpt the user highlighted — do not paraphrase, do not trim, do not normalize whitespace. The frontend matches strings character-by-character; any edit breaks the highlight. Backend creates the card and the reference atomically.
+The backend copies that message's selection text **and its character range**, so the highlight lands on the exact span the user dragged — even one crossing a bold run or a line break. Backend creates the card and the reference atomically.
+
+**Do not retype the excerpt on this path.** Any normalization you apply — smart quotes, a collapsed double space, a trimmed newline, full-width punctuation in Chinese text — produces a reference that looks correct in the database and never paints, with no error raised anywhere.
+
+Pass `selection_text` yourself **only** when back-filling a reference that did not originate from a UI selection. That reference has no range and paints only when its text occurs exactly once in the card.
 
 `source_conversation_id` is optional. If the derivation didn't go through a chat (SPA-driven derivations, future user-curated highlights), omit it; the resulting reference's `conversation_id` is null and clicking the highlight navigates to the derived card instead of opening the chat panel.
 
@@ -223,7 +227,7 @@ zen-mcp must be wired into Claude Code first. If the tool names below aren't in 
 | List soft-deleted cards | `trash.list({limit?})` | Ordered by deleted_at descending |
 | Decompose a card | `decompose(parent_card_id, cards[], {container_content?, conversation_id?})` | Parent stays live as the cleared container; children carry parent_card_id. Pass `conversation_id` when a conversation drove the split — decompose clears the parent's body, and that snapshot is the only record of the text it held |
 | Compose N cards into 1 | `compose(source_card_ids, target)` | Inverse of decompose; soft-deletes all sources; target.genesis defaults to "Composed from &lt;titles&gt;" |
-| Anchor a derivation (back-fill) | `reference.create(source_card_id, derived_card_id, conversation_id, selection_text)` | Returns Reference. For most cases use the inline reference on card.create instead. |
+| Anchor a derivation (back-fill) | `reference.create(source_card_id, derived_card_id, conversation_id, {message_id?, selection_text?})` | Returns Reference. Pass `message_id` for a UI selection — it supplies both the exact text and the range. `selection_text` is for back-fill only, and paints only when unique. For most cases use the inline reference on card.create instead. |
 | Get a reference | `reference.get(id)` | Returns Reference. |
 | List references | `reference.list({source_card_id?, derived_card_id?, conversation_id?})` | At least one filter required. |
 | Delete a reference | `reference.delete(id)` | Removes the highlight; does not touch the referenced cards/conversation. |
@@ -254,4 +258,5 @@ On user OK → `card.create(title, content, group_id, tags=["decision","backend"
 | Splitting an ingest strictly on `<h2>` | Find the depth where content units live — a plan's tasks may sit at `<h3>`. Preamble above the first heading becomes a lead child. |
 | Forcing `format: "html"` on every ingest | Format follows the group rule; default to markdown (it renders fully styled now). Use HTML only when the rule requires it or the content needs rich layout. |
 | Decomposing an ingest against the original file | The group rule may have translated or reformatted the card. Slice the conformed card you created, not the source file, or you reintroduce the wrong language/markup. |
+| Retyping the excerpt when the event carried a selection | Pass `message_id`; the backend has the SPA's verbatim copy and its offsets. A retype that normalizes anything silently never paints. |
 | Acting when zen-mcp isn't wired | If the tool names aren't in your tool list, tell the user and stop. |

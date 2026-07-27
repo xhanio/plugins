@@ -60,7 +60,8 @@ and stops (`ErrDisplaced`), so a stale process can't answer either.
                 title, content, group_id=<the anchor's group>,
                 parent_card_id=anchor_id  (when anchor_kind=="card"),
                 source_conversation_id=conversation_id,
-                …
+                conversation_id=<this event's conversation_id>,
+                reference={message_id: <this event's message_id>}   (when has_selection="true")
               )
               reply(conversation_id, "<short conclusion + markdown link>")
 ```
