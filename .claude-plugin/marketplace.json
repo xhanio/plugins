@@ -1,7 +1,7 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "xhanio",
-  "description": "Zen self-hosted knowledge tool — channel plugin + skills.",
+  "description": "Claude Code plugins by xhanio — the Zen self-hosted knowledge tool, plus skills for the Framingo Go framework and the GoPro build tool.",
   "owner": {
     "name": "xhanio",
     "email": "hanx.azure22@gmail.com"
@@ -12,6 +12,18 @@
       "description": "Zen channel + skills + zen-mcp HTTP reference.",
       "category": "productivity",
       "source": "./zen"
+    },
+    {
+      "name": "framingo",
+      "description": "Framingo Go framework skill — service lifecycle, supervisor, HTTP API server, database, pub/sub, package layout.",
+      "category": "development",
+      "source": "./framingo"
+    },
+    {
+      "name": "gopro",
+      "description": "GoPro build tool skill — project.yaml, multi-environment builds, Docker images, config/Kubernetes/Compose generation.",
+      "category": "development",
+      "source": "./gopro"
     }
   ]
 }

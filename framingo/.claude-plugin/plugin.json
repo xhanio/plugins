@@ -1,0 +1,13 @@
+{
+  "name": "framingo",
+  "description": "Framingo Go framework — the framingo skill plus its reference docs: service lifecycle, supervisor wiring, the declarative HTTP API server, database, pub/sub, package layout, config, and errors.",
+  "version": "1.0.0",
+  "author": {
+    "name": "xhanio",
+    "email": "hanx.azure22@gmail.com"
+  },
+  "homepage": "https://github.com/xhanio/framingo",
+  "repository": "https://github.com/xhanio/framingo",
+  "license": "MIT",
+  "keywords": ["framingo", "go", "golang", "framework", "backend", "service", "http-api", "skills"]
+}

@@ -1,0 +1,43 @@
+# COPY THIS FILE to pkg/routers/<domain>/router.yaml, next to router.go,
+# which embeds it with //go:embed router.yaml.
+#
+# `prefix` MUST match the package's domain: routers/order/ -> /orders.
+
+#
+# Middleware names below are commented out so this file works as-is. Every
+# name you list must already be registered via srvMgr.RegisterMiddlewares(...)
+# BEFORE RegisterRouters, or startup fails with "middleware <name> not found".
+# Uncomment once you've written them.
+
+server: http # which server added via srvMgr.Add(name, ...) hosts this group
+prefix: /orders # group prefix, appended to the server's own endpoint prefix
+# middlewares:        # optional, applied to every handler below
+#   - authnuser
+
+handlers:
+  - method: GET
+    path: /:id
+    func: GetOrder # must match a method name on the router
+
+  - method: POST
+    path: /
+    func: CreateOrder
+    # middlewares:    # handler middlewares run BEFORE the group's
+    #   - authz
+    permission: order.write # metadata only; your authz middleware enforces it
+
+  - method: GET
+    path: /health
+    func: Health
+    poll: true # suppresses per-request logging for pollers
+    throttle: # overrides the server-level WithThrottle
+      rps: 5.0
+      burst_size: 10
+
+  # method: WS declares a WebSocket route. The handler signature must be
+  # func(c api.Context, conn *websocket.Conn) error — a mismatch between
+  # `method: WS` and the handler signature is a registration error.
+  - method: WS
+    path: /events
+    func: Events
+# method also accepts ANY to match every HTTP verb.
