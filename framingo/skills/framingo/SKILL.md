@@ -1,10 +1,11 @@
 ---
 name: framingo
 description: Use when working with Framingo (`github.com/xhanio/framingo`) Go code — bootstrapping a new framingo backend project, creating services, registering with the supervisor, configuring HTTP servers/routers, the database service, pub/sub messaging, or implementing service lifecycle interfaces. Triggers on mentions of framingo, "new Go backend", service lifecycle, supervisor, handler groups, or any framingo package imports.
-compatibility: Requires Go 1.24+. Framework module is github.com/xhanio/framingo.
+compatibility: Requires Go 1.24+. Documents github.com/xhanio/framingo v0.6.3 — where the repo's go.mod pins a different framingo version, trust the code over this prose.
 metadata:
   author: xhanio
-  version: "1.2"
+  version: "1.3.1" # mirrors plugin.json; bump both together
+  framingo: v0.6.3 # the framework version these docs describe
 ---
 
 # Framingo - Service-Oriented Go Framework
@@ -367,7 +368,7 @@ import (
 )
 ```
 
-- `fapi` — **framingo's** `pkg/types/api`. Has `Router`, `Middleware`, `HandlerKey`, `ErrorBody`, `ContextKeyCredential`. It has **no `Context` type**.
+- `fapi` — **framingo's** `pkg/types/api`. Has `Router`, `Middleware`, `RequestInfo`, `CORSConfig`, `ErrorBody`, `ContextKeyCredential`. It has **no `Context` type**.
 - `api` — **your project's** `pkg/types/api`, which you own and can extend. Defines `Context`, `DiscoverHandlers`, `WrapHandler`, `WrapWebSocket`, and request/response DTOs.
 
 `api.Context` below always means the **project** one. Referring to it as a framingo type is a mistake — framingo ships no such interface.
@@ -435,7 +436,7 @@ srvMgr := server.New(server.WithLogger(logger))
 if err := srvMgr.Add("http", server.WithEndpoint("0.0.0.0", 8080, "/")); err != nil {
     return errors.Wrap(err)
 }
-if err := srvMgr.RegisterMiddlewares(authMW, corsMW); err != nil {   // before routers
+if err := srvMgr.RegisterMiddlewares(authMW, throttleMW); err != nil { // before routers
     return errors.Wrap(err)
 }
 if err := srvMgr.RegisterRouters(userRouter, orderRouter); err != nil {

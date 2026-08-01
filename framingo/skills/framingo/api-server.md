@@ -8,7 +8,7 @@ Two different packages are in play throughout this document. Router code imports
 
 | Import | Alias | Owned by | Provides |
 |---|---|---|---|
-| `github.com/xhanio/framingo/pkg/types/api` | `fapi` | framingo | `Router`, `Middleware`, `HandlerKey`, `HandlerGroup`, `ErrorBody`, `WrapError`, `ContextKey*`, `Endpoint` |
+| `github.com/xhanio/framingo/pkg/types/api` | `fapi` | framingo | `Router`, `Middleware`, `RequestInfo`, `ErrorBody`, `WrapError`, `ContextKey*`, `Endpoint` |
 | `<project>/pkg/types/api` | none (`api`) | **you** | `Context`, `HandlerFunc`, `WebSocketHandlerFunc`, `WrapHandler`, `WrapWebSocket`, `DiscoverHandlers`, request/response DTOs |
 
 **`api.Context` in this document is always the project's**, e.g. [`example/pkg/types/api/api.go`](_templates/api-context.go). Framingo does **not** define a `Context` interface — don't go looking for one in `fapi`, and don't import both packages unaliased (compile error).
@@ -20,7 +20,7 @@ Two different packages are in play throughout this document. Router code imports
 2. Middlewares registered      →  srvMgr.RegisterMiddlewares(authMW, ...)
 3. Routers registered         →  srvMgr.RegisterRouters(myRouter)
    a. Router.Config() called  →  returns embedded YAML ([]byte)
-   b. YAML unmarshaled        →  produces HandlerGroup with Handlers
+   b. YAML unmarshaled        →  produces the server-private group config
    c. Router.Handlers() called →  returns map[string]any
       - Recommended: `return api.DiscoverHandlers(r)` — reflects over the router's
         `func(api.Context) error` methods (project api.Context) and wraps each into
@@ -29,9 +29,9 @@ Two different packages are in play throughout this document. Router code imports
    d. For each YAML handler:
       - Func name looked up in Handlers() map
       - Type asserted based on method (WS → func(echo.Context, *websocket.Conn) error, others → echo.HandlerFunc)
-      - HandlerKey struct generated: {Server, Method, Path}
+      - a server-private handler key generated: {Server, Method, Path}
       - Handler func stored in manager.handlerFuncs[key] or wsHandlerFuncs[key]
-   e. Server matched by HandlerGroup.Server field
+   e. Server matched by the group's server field
    f. Echo group created at endpoint.Path + group.Prefix
    g. For each handler:
       - Handler-specific + group-level middlewares collected
@@ -52,11 +52,17 @@ srvMgr := server.New(
 // Step 1: Add named server instances (each gets its own echo.Echo)
 srvMgr.Add("http", server.WithEndpoint("0.0.0.0", 8080, "/"))
 srvMgr.Add("admin", server.WithEndpoint("0.0.0.0", 9090, "/admin"),
-    server.WithThrottle(100, 200),
+    // Per-server middleware configs: a plain name-to-config mapping, since
+    // defaults carry no order. A middleware's block is what its Func receives
+    // wherever nothing more specific is configured; "cors" is the server's
+    // built-in CORS — the one name it claims — enabled here ahead of routing.
+    // A router.yaml entry with its own block wins, handler over group over
+    // server.
+    server.WithMiddlewareConfigs([]byte("cors: true\nthrottle:\n  rps: 100.0\n  burst_size: 200\n")),
 )
 
 // Step 2: Register middlewares BEFORE routers (routers reference them by name)
-srvMgr.RegisterMiddlewares(authMiddleware, corsMiddleware)
+srvMgr.RegisterMiddlewares(authMiddleware, deflateMiddleware)
 
 // Step 3: Register routers (triggers the full wiring flow above)
 srvMgr.RegisterRouters(myRouter)
@@ -222,14 +228,14 @@ handlers:
 The server uses a struct-based key to uniquely identify each handler:
 
 ```go
-type HandlerKey struct {
+type handlerKey struct { // private to the server package
     Server string
     Method string
     Path   string
 }
 ```
 
-For example, the key for `ListUsers` is `HandlerKey{Server: "http", Method: "GET", Path: "/users"}`. Keys are used as map keys for direct lookups. The `matchHandler` logic falls back through: exact match → WS fallback (for GET requests) → ANY fallback → wildcard path matching.
+For example, the key for `ListUsers` is `{Server: "http", Method: "GET", Path: "/users"}`. Keys are used as map keys for direct lookups. The `matchHandler` logic falls back through: exact match → WS fallback (for GET requests) → ANY fallback → wildcard path matching.
 
 ## How Routes Map to Echo
 
@@ -256,7 +262,12 @@ type Router interface {
 
 type Middleware interface {
     common.Service
-    Func(echo.HandlerFunc) echo.HandlerFunc   // standard Echo middleware signature
+    // config is the raw YAML under the middleware's name, nil when there is
+    // none. Called once per attachment at registration - and again on restart,
+    // when routes are rebuilt - so per-route state lives in the returned
+    // closure. An error fails registration; returning no function and no error
+    // declines the attachment, and the server skips it.
+    Func(config []byte) (func(echo.HandlerFunc) echo.HandlerFunc, error)
 }
 ```
 
@@ -305,7 +316,21 @@ Middlewares are registered by name via `RegisterMiddlewares()`. The YAML config 
 3. If any referenced middleware name is not found, registration fails with `NotImplemented` error
 
 Built-in server middlewares (applied to all routes automatically):
-`Request → CORS (debug only) → Recover → Logger → Info → Error → Throttle → [Custom middlewares] → Handler → Response`
+`Request → Recover → CORS → [server-level via WithMiddlewares] → Logger → Info → Error → [Custom middlewares] → Handler → Response`
+
+Recover, Logger, Info and Error are plain lifecycle functions — no config, no names. CORS and the `WithMiddlewares` additions are standard `api.Middleware`s, each built from the server's middleware configs under its own name. Recover sits outermost so even a panicking server-level middleware yields a structured error; CORS answers preflight before any user code; server-level middlewares run ahead of Info so they see every request, matched or not. Returning no function from `Func` declines attachment — CORS does exactly that until configured.
+
+A router.yaml middleware entry is a bare name or a single-key map carrying that middleware's config for the route:
+
+```yaml
+middlewares:
+  - authnuser          # bare — Func(nil)
+  - throttle:          # configured — Func receives this block as raw YAML
+      rps: 1
+      burst_size: 3
+```
+
+The same name at handler and group level resolves once, the handler's entry winning; config resolves most-specific-first — the handler entry's block, else the group entry's, else the server's middleware config (`WithMiddlewareConfigs`), else nil. A null entry (`- name:`) carries no block and inherits the next level; an empty block (`- name: {}`) shadows it — the way a handler opts out of a group's or the server's config without detaching the middleware. CORS is one of the server's built-ins — browser protocol rather than app policy, sitting ahead of routing to answer preflight requests that match no route; `cors: true` in the middleware configs enables it, an `fapi.CORSConfig` policy block tightens it, `false` or absent keeps it off. `cors` is the one name the server claims: a registered middleware reusing it would share its config block, so pick a different one. Rate limiting stays app-side: the example ships `example/pkg/middlewares/throttle`, attached through router.yaml with its limit per route via a config block or server-wide via the middleware configs.
 
 ## Error Response Format
 

@@ -30,9 +30,10 @@ handlers:
     path: /health
     func: Health
     poll: true # suppresses per-request logging for pollers
-    throttle: # overrides the server-level WithThrottle
-      rps: 5.0
-      burst_size: 10
+    middlewares:
+      - throttle: # a middleware entry may carry config for this route; the
+          rps: 5.0 # block is handed raw to that middleware at registration
+          burst_size: 10
 
   # method: WS declares a WebSocket route. The handler signature must be
   # func(c api.Context, conn *websocket.Conn) error — a mismatch between

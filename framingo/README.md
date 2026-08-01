@@ -50,6 +50,17 @@ from prose yields a subtly different type that every handler then inherits.
 The directory is underscore-prefixed so the Go toolchain ignores it — the
 files are real, compile-verified Go, not sketches.
 
+## Versioning
+
+The plugin has a version of its own, separate from the framework module's:
+`plugin.json` and the skill's `metadata.version` carry it, bumped together
+whenever the docs change — the plugin cache is keyed by it, so an unbumped
+version never reaches installed copies. Which framework release the docs
+describe is pinned separately, in the skill's `compatibility` line and
+`metadata.framingo`; refresh the pin with every framingo release that touches
+these docs. Where a repo's go.mod pins a different framingo version, the code
+outranks this prose.
+
 ## Source
 
 This plugin is developed in the framework repo at
