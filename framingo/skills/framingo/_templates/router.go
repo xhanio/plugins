@@ -39,6 +39,11 @@ type router struct {
 }
 
 func New(svc model.Order, log log.Logger) fapi.Router {
+	return newRouter(svc, log)
+}
+
+// newRouter returns the concrete router, the form package tests construct.
+func newRouter(svc model.Order, log log.Logger) *router {
 	return &router{
 		svc: svc,
 		log: log,

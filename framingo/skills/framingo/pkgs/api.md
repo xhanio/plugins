@@ -11,7 +11,7 @@ Two different packages are in play throughout this document. Router code imports
 | `github.com/xhanio/framingo/pkg/types/api` | `fapi` | framingo | `Router`, `Middleware`, `RequestInfo`, `ErrorBody`, `WrapError`, `ContextKey*`, `Endpoint` |
 | `<project>/pkg/types/api` | none (`api`) | **you** | `Context`, `HandlerFunc`, `WebSocketHandlerFunc`, `WrapHandler`, `WrapWebSocket`, `DiscoverHandlers`, request/response DTOs |
 
-**`api.Context` in this document is always the project's**, e.g. [`example/pkg/types/api/api.go`](_templates/api-context.go). Framingo does **not** define a `Context` interface — don't go looking for one in `fapi`, and don't import both packages unaliased (compile error).
+**`api.Context` in this document is always the project's**, e.g. [`example/pkg/types/api/api.go`](../_templates/api-context.go). Framingo does **not** define a `Context` interface — don't go looking for one in `fapi`, and don't import both packages unaliased (compile error).
 
 ## Route Registration Flow
 
@@ -74,7 +74,7 @@ A Router provides two things: a YAML config declaring routes, and a map of handl
 
 ### Handler signature: use the project `api.Context`, not `echo.Context`
 
-**Declare every handler as `func(c api.Context) error`** — where `api.Context` is the interface **your project** defines (`<project>/pkg/types/api`, *not* framingo's `fapi`), embedding `echo.Context` + `context.Context`. Canonical implementation to copy: [`example/pkg/types/api/api.go`](_templates/api-context.go).
+**Declare every handler as `func(c api.Context) error`** — where `api.Context` is the interface **your project** defines (`<project>/pkg/types/api`, *not* framingo's `fapi`), embedding `echo.Context` + `context.Context`. Canonical implementation to copy: [`example/pkg/types/api/api.go`](../_templates/api-context.go).
 
 What you get over a bare `echo.Context`:
 
@@ -119,7 +119,13 @@ type router struct {
     svc  user.Manager
 }
 
+// New returns the interface; newRouter returns the concrete type, the form
+// package tests construct.
 func New(svc user.Manager, log log.Logger) fapi.Router {
+    return newRouter(svc, log)
+}
+
+func newRouter(svc user.Manager, log log.Logger) *router {
     return &router{svc: svc, log: log}
 }
 
@@ -309,7 +315,7 @@ func (r *router) Feed(c api.Context, conn *websocket.Conn) error {
 
 ## Middleware Resolution
 
-Middlewares are registered by name via `RegisterMiddlewares()`. The YAML config references them by the name returned from `Middleware.Name()`. During route registration:
+Middlewares are registered by name via `RegisterMiddlewares()`. The YAML config references them by the name returned from `Middleware.Name()`. (Writing one is covered in [middlewares.md](../app/middlewares.md); this section is how the server resolves them.) During route registration:
 
 1. Handler-specific middlewares are resolved first (from `handler.middlewares`)
 2. Group-level middlewares are resolved next (from `group.middlewares`)
@@ -330,7 +336,28 @@ middlewares:
       burst_size: 3
 ```
 
-The same name at handler and group level resolves once, the handler's entry winning; config resolves most-specific-first — the handler entry's block, else the group entry's, else the server's middleware config (`WithMiddlewareConfigs`), else nil. A null entry (`- name:`) carries no block and inherits the next level; an empty block (`- name: {}`) shadows it — the way a handler opts out of a group's or the server's config without detaching the middleware. CORS is one of the server's built-ins — browser protocol rather than app policy, sitting ahead of routing to answer preflight requests that match no route; `cors: true` in the middleware configs enables it, an `fapi.CORSConfig` policy block tightens it, `false` or absent keeps it off. `cors` is the one name the server claims: a registered middleware reusing it would share its config block, so pick a different one. Rate limiting stays app-side: the example ships `example/pkg/middlewares/throttle`, attached through router.yaml with its limit per route via a config block or server-wide via the middleware configs.
+The same name at handler and group level resolves once, the handler's entry winning; config resolves most-specific-first — the handler entry's block, else the group entry's, else the server's middleware config (see below), else nil. A null entry (`- name:`) carries no block and inherits the next level; an empty block (`- name: {}`) shadows it — the way a handler opts out of a group's or the server's config without detaching the middleware.
+
+### Server Middleware Configs (per-server defaults)
+
+Each server can carry a default config per middleware, set at `Add` time with `WithMiddlewareConfigs(raw []byte)`. The format is a plain YAML **mapping** of middleware name to config block — not a list, since defaults carry no order; only router.yaml's middleware entries are a sequence, because attachment order matters there:
+
+```yaml
+cors: true          # the server's built-in CORS: true | false | policy block
+throttle:           # default for every bare `- throttle` attachment
+  rps: 100.0
+  burst_size: 200
+authnuser:          # a name mapped to null carries a nil config
+```
+
+Rules:
+
+- A middleware's block is what its `Func` receives wherever nothing more specific is configured — bare route entries fall back to it, and server-level middlewares (`WithMiddlewares`) are built with it in place of nil.
+- Invalid YAML fails `Add`; a block a middleware rejects fails `Add` (server-level) or `RegisterRouters` (route-level), naming the middleware.
+- Names are matched exactly; a typo'd name silently configures nothing — unlike router.yaml refs, which fail registration with `NotImplemented`.
+- The example feeds this from `api.<name>.middlewares` in config.yaml (viper map → `yaml.Marshal` → `WithMiddlewareConfigs`); viper lowercases keys, so keep middleware names lowercase.
+
+CORS is one of the server's built-ins — browser protocol rather than app policy, sitting ahead of routing to answer preflight requests that match no route; `cors: true` in this mapping enables it, an `fapi.CORSConfig` policy block tightens it (unknown fields fail startup; `allow_credentials` requires explicit `allow_origins`), `false` or absent keeps it off. `cors` is the one name the server claims: a registered middleware reusing it would share its config block, so pick a different one. Rate limiting stays app-side: the example ships `example/pkg/middlewares/throttle`, attached through router.yaml with its limit per route via a config block or server-wide via this mapping.
 
 ## Error Response Format
 

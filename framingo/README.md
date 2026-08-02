@@ -22,21 +22,19 @@ invoke it by name with `/framingo`.
 
 ## What's inside
 
-One skill, `framingo`, with four reference documents it pulls in on demand, plus a
+One skill, `framingo`, whose reference files split into two halves, plus a
 set of copy-ready templates:
 
-- **SKILL.md** — the entry point: architecture, core concepts, the service
-  lifecycle interfaces, database and pub/sub usage, how to create a new
-  service, common mistakes, and the recipe for starting a new backend.
-- **api-server.md** — the API server in full: registration flow, `fapi.Router`
-  and middleware contracts, `router.yaml` format, handler keys, route mapping,
-  WebSocket handlers, and middleware resolution.
-- **package-layout.md** — the required `pkg/` structure, category rules, type
-  separation, server component file layout, and import organization.
-- **config-reference.md** — annotated config YAML template covering log, db,
-  api, pprof, and custom service keys.
-- **errors-reference.md** — `github.com/xhanio/errors`: creating, wrapping,
-  combining, and checking errors, plus the category → HTTP status table.
+- **SKILL.md** — the entry point: the two-half reference map, quick
+  reference, architecture, common mistakes, and the recipe for starting a
+  new backend.
+- **pkgs/** — how to *use framingo's packages*: supervisor & service
+  lifecycle, the API server and HTTP client, db, pubsub & messagebus,
+  planner, framework types, config, errors, and utilities.
+- **app/** — how to *write an application* shaped like `example/`: package
+  layout, authoring services, routers, and middlewares, the project
+  `types/` categories, and the components family (server daemon, cobra
+  cmd, client SDK).
 
 Only SKILL.md is read up front; the references load when the task calls for
 them.
@@ -53,13 +51,18 @@ files are real, compile-verified Go, not sketches.
 ## Versioning
 
 The plugin has a version of its own, separate from the framework module's:
-`plugin.json` and the skill's `metadata.version` carry it, bumped together
-whenever the docs change — the plugin cache is keyed by it, so an unbumped
-version never reaches installed copies. Which framework release the docs
-describe is pinned separately, in the skill's `compatibility` line and
-`metadata.framingo`; refresh the pin with every framingo release that touches
-these docs. Where a repo's go.mod pins a different framingo version, the code
-outranks this prose.
+`plugin.json` and the skill's `metadata.version` carry it, and the plugin
+cache is keyed by it, so an unbumped version never reaches installed copies.
+Which framework release the docs describe is pinned separately, in the
+skill's `compatibility` line and `metadata.framingo`. Where a repo's go.mod
+pins a different framingo version, the code outranks this prose.
+
+Every framingo shipment ends with a single Release commit that bumps every
+version surface at once — the plugin version and skill mirror (when docs
+changed since the last release), both framingo pins here, and the example's
+`project.yaml` version and `go.mod` requirement — and the tag lands on that
+commit, so a tag always contains metadata naming itself. The marketplace
+mirror syncs after.
 
 ## Source
 
