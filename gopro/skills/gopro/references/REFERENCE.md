@@ -7,7 +7,7 @@
 | Field | Required | Description |
 |-------|----------|-------------|
 | `product` | Yes | Product name, used for env var prefixes and metadata |
-| `model` | No | Product model identifier |
+| `model` | No | Product model identifier; sets `info.ProductModel` |
 | `version` | No | Product version string |
 | `domain` | No | Domain name |
 | `module` | No | Go module path (auto-detected from go.mod) |
@@ -147,11 +147,29 @@ differs only in `image_tag`.
 
 ## Build Metadata Injection
 
-GoPro injects metadata into binaries via `-ldflags` using the framingo package:
+`gopro build binary` injects thirteen fields into the binary via `-ldflags`,
+setting package vars on `github.com/xhanio/framingo/pkg/types/info`. A raw
+`go build` sets none of them, leaving every field empty.
 
-- Git: branch, tag, commit hash
-- Build: time, version, type
-- Product: name, model, version
+| Field | Value |
+|-------|-------|
+| `ProductName` | `product` from project.yaml |
+| `ProductModel` | `model` from project.yaml; or `--product-model` |
+| `ProductVersion` | `version` from project.yaml, falling back to `BuildVersion`; or `--product-version` |
+| `BuildVersion` | The Git tag, or `--build-version` |
+| `BuildType` | `--build-type` only |
+| `BuildDate` | `--build-date` only |
+| `BuildTime` | Time of the build, RFC3339 |
+| `GitBranch` | `git rev-parse --abbrev-ref HEAD` |
+| `GitTag` | `git describe --tags --always` |
+| `GitCommit` | `git rev-parse HEAD` |
+| `ProjectName` | The Go module path |
+| `ProjectPath` | Project directory relative to `$GOPATH/src` |
+| `ProjectRoot` | Absolute working directory of the build |
+
+The three Git values are best-effort: outside a repository the build still
+succeeds and they arrive empty. `BuildType` and `BuildDate` have no project.yaml
+equivalent — a flag is the only way to set them.
 
 Access in Go code:
 
@@ -268,8 +286,8 @@ vars on the binary spec and let `env.{name}` vary only what changes.
 
 ## Template Rendering Pipeline
 
-1. Resolve the target from `-o`/`-t` then `*_tgt`. An unset target is an error, and a target overlapping a `*_src` directory is refused — step 2 would otherwise delete the templates about to be rendered
-2. Remove the component's target directory (config and Kubernetes only — not docker-compose)
+1. Resolve the target from `-o`/`-t`, then `*_tgt`, then `*_src` — an unset target renders the component in place, beside its templates
+2. Remove the component's target directory (config and Kubernetes only — not docker-compose), unless it overlaps a template source, which is the in-place case: clearing it would delete the templates about to be read, so existing files are left alone
 3. Scan source directory for files matching `files` patterns; an empty or absent `files` list processes everything
 4. For files with `template.` prefix: render as Go template, strip the prefix from the file name only — the subdirectory is part of the output path
 5. For other files: copy as-is

@@ -1,10 +1,11 @@
 ---
 name: gopro
 description: Use when a project has a project.yaml or uses the gopro command; when building Go binaries or Docker images across environments; when cross-compiling for multiple platforms or setting per-target build env; when generating config, Kubernetes, or Docker Compose templates; when scaffolding a Go project structure; or when handling secret.env and config.yaml in env/ directories.
-compatibility: Requires Go, git, and optionally Docker. Install with go install github.com/xhanio/gopro@latest
+compatibility: Requires Go 1.24+, git, and optionally Docker. Install with go install github.com/xhanio/gopro@latest. Documents github.com/xhanio/gopro v0.1.10 — where the installed gopro differs, trust `gopro <command> --help` over this prose.
 metadata:
   author: xhanio
-  version: "1.1"
+  version: "1.1.0" # mirrors plugin.json; bump both together
+  gopro: v0.1.10 # the tool version these docs describe
 ---
 
 # GoPro - Go Project Generator and Build Tool
@@ -47,7 +48,7 @@ The `project.yaml` file has four main sections:
 ```yaml
 # Top-level metadata
 product: myapp              # Required
-model: standard             # Optional
+model: standard             # Optional; sets info.ProductModel
 version: v1.0.0             # Optional
 domain: example.com         # Optional
 module: github.com/user/app # Auto-detected from go.mod
@@ -409,19 +410,24 @@ gopro build binary -e local
 go build -o myapp ./cmd/myapp
 ```
 
-The injected fields include: `ProductName`, `ProductVersion`, `BuildVersion`, `BuildType`, `BuildDate`, `BuildTime`, `GitBranch`, `GitTag`, `ProjectName`, `ProjectPath`, and `ProjectRoot`. These are set on `github.com/xhanio/framingo/pkg/types/info` package vars and can be accessed at runtime (e.g., via `gopro version`).
+Thirteen fields are injected: `ProductName`, `ProductModel`, `ProductVersion`,
+`BuildVersion`, `BuildType`, `BuildDate`, `BuildTime`, `GitBranch`, `GitTag`,
+`GitCommit`, `ProjectName`, `ProjectPath`, and `ProjectRoot`. They are set on
+`github.com/xhanio/framingo/pkg/types/info` package vars and readable at runtime
+(e.g. via `gopro version`). The `--product-model`, `--product-version`,
+`--build-version`, `--build-type`, and `--build-date` flags each override the
+matching field. See `references/REFERENCE.md` for where every value comes from.
 
 ## Troubleshooting
 
 - **Config not found**: Run `gopro example` or use `-c path/to/config.yaml`
-- **Git info error**: Initialize git (`git init && git add . && git commit -m "init"`)
+- **Blank git metadata**: Not an error — git info is best-effort, so outside a repository commands still succeed and inject empty `GitTag`/`GitBranch`/`GitCommit`. Initialize git and make a commit (`git init && git add . && git commit -m "init"`) so `git describe --tags --always` has something to report
 - **Template render error**: Check dependency order (configs before K8s), verify file paths
 - **Cross-compile CGO error**: Either set `CGO_ENABLED=0` to drop cgo entirely, or keep `CGO_ENABLED=1` and supply a cross compiler per target via `platforms[].env` (e.g. `CC=aarch64-linux-gnu-gcc`) — the toolchain must exist on the build host
 - **`cannot unmarshal !!seq into string`**: A YAML alias was spliced into an array. Restate the list; anchors cannot concatenate sequences
 - **Env var set in `default` went missing**: An `env.<name>` override replaced the whole array. Restate every value it still needs
 - **Dockerfile not found**: Verify `build_src` or `image_build_src` paths contain a Dockerfile
 - **Empty version info**: Binary was built with `go build` instead of `gopro build binary`
-- **Generated output missing old files**: Expected — config and Kubernetes target directories are wiped before each render
-- **`no output directory for config ...`**: `config_tgt`/`kubernetes_tgt` is unset. Set it in `project.yaml` or pass `-o`/`-t`. It is deliberately not optional: generation clears its target first, so falling back to the source would delete the templates
-- **`refusing to clear output directory ... overlaps template source`**: The target resolves onto a `*_src` directory. Point it somewhere separate, e.g. `dist/`
+- **Generated output missing old files**: Expected when `config_tgt`/`kubernetes_tgt` names a directory of its own — it is wiped before each render so output reflects only current sources
+- **Stale files persist instead**: The opposite case, an in-place render. With `config_tgt`/`kubernetes_tgt` unset the output goes beside the templates, so the target is *not* cleared — clearing it would delete the templates. Set a distinct target (e.g. `dist/`) for a clean render every time
 - Use `-v` (verbose) flag on any command for detailed debug output; it prints the resolved build env and command line
