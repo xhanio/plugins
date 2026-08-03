@@ -107,9 +107,7 @@ func newManager(repo repository.Repository, mb common.RawMessageSender, opts ...
 		wg:         &sync.WaitGroup{},
 	}
 	m.apply(opts...)
-	if m.name == "" {
-		m.name = nameutil.Name(m)
-	}
+	m.name = nameutil.Name(m)
 	m.log = m.log.By(m)
 	if m.ctx == nil {
 		m.ctx = context.Background()
@@ -129,6 +127,14 @@ stripped so the kind stays visible — this service is
 project prefix is judged from the gopro-injected `info.ProjectPath`;
 binaries built without it (plain `go build`, `go test`) fall back to the
 full import path.
+
+The name is fixed at construction, in exactly this position: after
+`apply(opts...)` and before `log.By(m)`, which reads it. Guard with
+`if m.name == ""` only when the package offers a `WithName` option to
+respect (framingo's supervisor, db, pubsub, messagebus, and planner
+do); with no way to preset the name, assign directly. `Name()` is a
+plain getter — never compute the name lazily inside it; a getter that
+writes state is a data race waiting for its first concurrent caller.
 
 ```go
 func (m *manager) Dependencies() []common.Service {

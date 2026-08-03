@@ -139,13 +139,14 @@ func New(svc user.Manager, log log.Logger) fapi.Router {
 }
 
 func newRouter(svc user.Manager, log log.Logger) *router {
-    return &router{svc: svc, log: log}
+    r := &router{svc: svc, log: log}
+    r.name = nameutil.Name(r) // project-relative, layout root stripped: routers/user/router
+    return r
 }
 
+// Name is a plain getter - the name is fixed at construction, never
+// computed lazily here.
 func (r *router) Name() string {
-    if r.name == "" {
-        r.name = nameutil.Name(r) // project-relative, layout root stripped: routers/user/router
-    }
     return r.name
 }
 

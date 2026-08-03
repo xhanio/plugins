@@ -42,17 +42,17 @@ func New(svc model.Order, log log.Logger) fapi.Router {
 }
 
 // newRouter returns the concrete router, the form package tests construct.
+// The name is fixed here at construction; Name() stays a plain getter.
 func newRouter(svc model.Order, log log.Logger) *router {
-	return &router{
+	r := &router{
 		svc: svc,
 		log: log,
 	}
+	r.name = nameutil.Name(r) // project-relative, layout root stripped: routers/order/router
+	return r
 }
 
 func (r *router) Name() string {
-	if r.name == "" {
-		r.name = nameutil.Name(r)
-	}
 	return r.name
 }
 

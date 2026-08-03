@@ -75,9 +75,7 @@ func New(configPath string) Server {
 	m := &manager{
 		config: newConfig(configPath),
 	}
-	if m.name == "" {
-		m.name = nameutil.Name(m) // components/server/example/manager
-	}
+	m.name = nameutil.Name(m) // components/server/example/manager
 	return m
 }
 ```

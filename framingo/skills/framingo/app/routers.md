@@ -139,9 +139,7 @@ func newRouter(em model.Example, log log.Logger) *router {
 		em:  em,
 		log: log,
 	}
-	if r.name == "" {
-		r.name = nameutil.Name(r) // project-relative, layout root stripped: routers/example/router
-	}
+	r.name = nameutil.Name(r) // project-relative, layout root stripped: routers/example/router
 	return r
 }
 
