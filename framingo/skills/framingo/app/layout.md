@@ -144,13 +144,12 @@ real `pkg/routers/example/router.go`:
 import (
 	// group 1: Go standard library
 	_ "embed"
-	"path"
 
 	// group 2: third-party + framingo (external to this module)
 	fapi "github.com/xhanio/framingo/pkg/types/api"
 	"github.com/xhanio/framingo/pkg/types/common"
 	"github.com/xhanio/framingo/pkg/utils/log"
-	"github.com/xhanio/framingo/pkg/utils/reflectutil"
+	"github.com/xhanio/framingo/pkg/utils/nameutil"
 
 	// group 3: this module (the example is its own Go module)
 	"github.com/xhanio/framingo/example/pkg/types/api"

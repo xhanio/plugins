@@ -56,6 +56,7 @@ Available in `pkg/structs/`:
 
 - `confutil` — Viper-from-context delivery ([supervisor.md](supervisor.md) Configuration Pattern)
 - `paramutil` — ordered key/value params and the notations they're spelled in (`a=b&c=d`, `a=b c=d`, command lines); backs env/arg merging and DSN building
-- `reflectutil` — `Locate` (package-path service names), struct field scan/apply
+- `nameutil` — service/router names: `Name(m)` is the package dir relative to the project root (judged from the gopro-injected `info.ProjectPath`; full import path without it) with the layout root (`nameutil.Root`, default `pkg`) stripped, joined with the type name — `services/db/manager`, `routers/user/router`
+- `reflectutil` — `Locate` (import path + type name), struct field scan/apply
 - `certutil` — cert bundle loading for TLS options
 - `sliceutil`, `maputil`, `strutil`, `ioutil`, `netutil`, `timeutil` — small stateless helpers

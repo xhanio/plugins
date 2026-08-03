@@ -6,12 +6,11 @@ package order
 
 import (
 	_ "embed"
-	"path"
 
 	fapi "github.com/xhanio/framingo/pkg/types/api"
 	"github.com/xhanio/framingo/pkg/types/common"
 	"github.com/xhanio/framingo/pkg/utils/log"
-	"github.com/xhanio/framingo/pkg/utils/reflectutil"
+	"github.com/xhanio/framingo/pkg/utils/nameutil"
 
 	"myapp/pkg/types/api"
 	"myapp/pkg/types/model"
@@ -52,7 +51,7 @@ func newRouter(svc model.Order, log log.Logger) *router {
 
 func (r *router) Name() string {
 	if r.name == "" {
-		r.name = path.Join(reflectutil.Locate(r))
+		r.name = nameutil.Name(r)
 	}
 	return r.name
 }

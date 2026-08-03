@@ -1,11 +1,11 @@
 ---
 name: framingo
 description: Use when working with Framingo (`github.com/xhanio/framingo`) Go code — bootstrapping a new framingo backend project, creating services, registering with the supervisor, configuring HTTP servers/routers, the database service, pub/sub messaging, or implementing service lifecycle interfaces. Triggers on mentions of framingo, "new Go backend", service lifecycle, supervisor, handler groups, or any framingo package imports.
-compatibility: Requires Go 1.24+. Documents github.com/xhanio/framingo v0.6.6 — where the repo's go.mod pins a different framingo version, trust the code over this prose.
+compatibility: Requires Go 1.24+. Documents github.com/xhanio/framingo v0.6.7 — where the repo's go.mod pins a different framingo version, trust the code over this prose.
 metadata:
   author: xhanio
-  version: "1.3.4" # mirrors plugin.json; bump both together
-  framingo: v0.6.6 # the framework version these docs describe
+  version: "1.3.5" # mirrors plugin.json; bump both together
+  framingo: v0.6.7 # the framework version these docs describe
 ---
 
 # Framingo - Service-Oriented Go Framework

@@ -108,7 +108,7 @@ func newManager(repo repository.Repository, mb common.RawMessageSender, opts ...
 	}
 	m.apply(opts...)
 	if m.name == "" {
-		m.name = path.Join(reflectutil.Locate(m))
+		m.name = nameutil.Name(m)
 	}
 	m.log = m.log.By(m)
 	if m.ctx == nil {
@@ -120,7 +120,17 @@ func newManager(repo repository.Repository, mb common.RawMessageSender, opts ...
 func (m *manager) Name() string {
 	return m.name
 }
+```
 
+`nameutil.Name` derives the name from the package path relative to the
+project root, with the layout root (`nameutil.Root`, default `pkg`)
+stripped so the kind stays visible — this service is
+`services/example/manager`, a router is `routers/example/router`. The
+project prefix is judged from the gopro-injected `info.ProjectPath`;
+binaries built without it (plain `go build`, `go test`) fall back to the
+full import path.
+
+```go
 func (m *manager) Dependencies() []common.Service {
 	deps := []common.Service{m.repository}
 	if s, ok := m.mb.(common.Service); ok {

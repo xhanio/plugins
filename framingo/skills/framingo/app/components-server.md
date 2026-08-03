@@ -76,7 +76,7 @@ func New(configPath string) Server {
 		config: newConfig(configPath),
 	}
 	if m.name == "" {
-		m.name = path.Join(reflectutil.Locate(m))
+		m.name = nameutil.Name(m) // components/server/example/manager
 	}
 	return m
 }
