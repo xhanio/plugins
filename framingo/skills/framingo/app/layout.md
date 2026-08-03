@@ -58,7 +58,7 @@ pkg/
 │   └── example/                 # business tier
 ├── routers/                     # auth/ certificate/ example/ health/ messagebus/ role/ user/
 │   └── example/                 #   router.go, router.yaml, handler.go, router_test.go
-├── middlewares/                 # authnagent/ authnuser/ authz/ deflate/ feature/ throttle/
+├── middlewares/                 # authnagent/ authnuser/ authz/ cors/ deflate/ feature/ throttle/
 │   └── throttle/                #   middleware.go (+ option.go where configurable)
 ├── types/
 │   ├── api/ entity/ model/ orm/ repo/    # the five core categories

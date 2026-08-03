@@ -48,8 +48,8 @@ api:
       cors: true              # plain mapping, unordered; each block reaches
       throttle:               # its middleware wherever nothing more specific
         rps: 100.0            # is configured (router.yaml overrides per group
-        burst_size: 200       # or handler). "cors: true" enables the server's
-                              # built-in CORS, the one name it claims
+        burst_size: 200       # or handler). "cors: true" drives the example's
+                              # server-level cors middleware
   admin:                      # server name: "admin"
     host: 0.0.0.0
     port: 9090
@@ -81,6 +81,6 @@ pprof:
 - `db.connection.*` keys are read dynamically during `db.Manager.Init(ctx)` via `confutil.FromContext(ctx)`, allowing values to change on service restart
 - `api.*` is iterated as a string map — each top-level key under `api` becomes a named server instance
 - TLS is enabled per-server when `api.<name>.cert` is set
-- `api.<name>.middlewares` is passed to `server.WithMiddlewareConfigs` as each middleware's per-server default config; a router.yaml entry carrying its own block still wins (handler over group over server). The server's built-in cors middleware reads its block from the same mapping — `cors: true` enables it ahead of routing, so preflight requests that match no route are answered; the other built-ins take no config. Names in this mapping are matched exactly and a typo'd one silently configures nothing (unlike router.yaml refs, which fail registration); viper lowercases keys, so keep middleware names lowercase. YAML 1.1 truthiness applies — `cors: yes`/`on` enable it too
+- `api.<name>.middlewares` is passed to `server.WithMiddlewareConfigs` as each middleware's per-server default config; a router.yaml entry carrying its own block still wins (handler over group over server). Server-level middlewares (`WithMiddlewares`) are activated by the same mapping — an entry enables (`cors: true`, `cors:`, or a policy block), no entry leaves one dormant, and booleans anywhere in the mapping are switches, not config, arriving as `Func`'s `enabled` argument; the lifecycle built-ins take no config and claim no names. Names in this mapping are matched exactly and a typo'd one silently configures nothing (unlike router.yaml refs, which fail registration); viper lowercases keys, so keep middleware names lowercase. YAML 1.1 truthiness applies — `cors: yes`/`on` enable it too
 - Custom service config keys are accessed in `Init(ctx)` via `confutil.FromContext(ctx).GetString("myservice.key")`
 - Pubsub, messagebus, and planner services are configured entirely via functional options, not YAML keys

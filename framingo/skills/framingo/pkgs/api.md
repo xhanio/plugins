@@ -52,12 +52,16 @@ srvMgr := server.New(
 // Step 1: Add named server instances (each gets its own echo.Echo)
 srvMgr.Add("http", server.WithEndpoint("0.0.0.0", 8080, "/"))
 srvMgr.Add("admin", server.WithEndpoint("0.0.0.0", 9090, "/admin"),
-    // Per-server middleware configs: a plain name-to-config mapping, since
-    // defaults carry no order. A middleware's block is what its Func receives
-    // wherever nothing more specific is configured; "cors" is the server's
-    // built-in CORS — the one name it claims — enabled here ahead of routing.
-    // A router.yaml entry with its own block wins, handler over group over
-    // server.
+    // Server-level middlewares run on every request, matched or not, in this
+    // order — the position router.yaml cannot express, where an app's cors
+    // middleware belongs (preflights match no route).
+    server.WithMiddlewares(corsMW),
+    // Per-server middleware configs: a plain name-to-value mapping, since
+    // defaults carry no order. A block is what a Func receives wherever
+    // nothing more specific is configured; a boolean is a switch; and for
+    // the WithMiddlewares roster an entry here is the activation — cors is
+    // on because "cors" has one. A router.yaml entry with its own value
+    // wins, handler over group over server.
     server.WithMiddlewareConfigs([]byte("cors: true\nthrottle:\n  rps: 100.0\n  burst_size: 200\n")),
 )
 
@@ -278,12 +282,13 @@ type Router interface {
 
 type Middleware interface {
     common.Service
-    // config is the raw YAML under the middleware's name, nil when there is
-    // none. Called once per attachment at registration - and again on restart,
-    // when routes are rebuilt - so per-route state lives in the returned
-    // closure. An error fails registration; returning no function and no error
-    // declines the attachment, and the server skips it.
-    Func(config []byte) (func(echo.HandlerFunc) echo.HandlerFunc, error)
+    // enabled: the resolved switch - booleans under the middleware's name,
+    // most specific first; default is the attachment's presence (router.yaml
+    // entry, or a server-mapping entry for WithMiddlewares). config: the most
+    // specific non-boolean YAML, nil when there is none; resolved
+    // independently of the switch. An error fails registration; returning no
+    // function and no error declines the attachment.
+    Func(enabled bool, config []byte) (func(echo.HandlerFunc) echo.HandlerFunc, error)
 }
 ```
 
@@ -332,28 +337,29 @@ Middlewares are registered by name via `RegisterMiddlewares()`. The YAML config 
 3. If any referenced middleware name is not found, registration fails with `NotImplemented` error
 
 Built-in server middlewares (applied to all routes automatically):
-`Request → Recover → CORS → [server-level via WithMiddlewares] → Logger → Info → Error → [Custom middlewares] → Handler → Response`
+`Request → Recover → [server-level via WithMiddlewares, in order] → Logger → Info → Error → [Route middlewares] → Handler → Response`
 
-Recover, Logger, Info and Error are plain lifecycle functions — no config, no names. CORS and the `WithMiddlewares` additions are standard `api.Middleware`s, each built from the server's middleware configs under its own name. Recover sits outermost so even a panicking server-level middleware yields a structured error; CORS answers preflight before any user code; server-level middlewares run ahead of Info so they see every request, matched or not. Returning no function from `Func` declines attachment — CORS does exactly that until configured.
+Recover, Logger, Info and Error are plain lifecycle functions — no config, no names; every name in the middleware configs belongs to the app. The `WithMiddlewares` additions are standard `api.Middleware`s — the roster and its order are code, and the server's middleware configs activate each entry (no entry leaves one dormant); returning no function from `Func` declines attachment. Recover sits outermost so even a panicking server-level middleware yields a structured error, and the server-level slot runs ahead of Info so it sees every request, matched or not — which is why an app's cors middleware belongs there (the example ships one: preflight `OPTIONS` match no route, so no route-attached middleware could answer them; a server whose mapping has no `cors` entry serves without it).
 
 A router.yaml middleware entry is a bare name or a single-key map carrying that middleware's config for the route:
 
 ```yaml
 middlewares:
-  - authnuser          # bare — Func(nil)
-  - throttle:          # configured — Func receives this block as raw YAML
+  - authnuser          # bare — Func(true, nil)
+  - authz: false       # switch — Func(false, ...); the standard guard declines
+  - throttle:          # configured — Func(true, <this block as raw YAML>)
       rps: 1
       burst_size: 3
 ```
 
-The same name at handler and group level resolves once, the handler's entry winning; config resolves most-specific-first — the handler entry's block, else the group entry's, else the server's middleware config (see below), else nil. A null entry (`- name:`) carries no block and inherits the next level; an empty block (`- name: {}`) shadows it — the way a handler opts out of a group's or the server's config without detaching the middleware.
+The same name at handler and group level resolves once, the handler's entry winning. The value chain — handler entry, group entry, server mapping — resolves into `Func`'s two arguments independently: the first **boolean** is the switch (`enabled`), the first **block** is the config. So `- authz: false` at a handler frees the one route from its group's auth, `- name: true` forces an attachment back on under a group's `false` (most specific wins both ways), and a disabled entry still inherits the group's block, unused. With no boolean anywhere, enabled defaults to true — the entry's presence is the intent. A null entry (`- name:`) carries no block and inherits the next level; an empty block (`- name: {}`) shadows it — opting out of inherited config without detaching; a config genuinely shaped like a boolean is written quoted (`- name: "false"`).
 
 ### Server Middleware Configs (per-server defaults)
 
 Each server can carry a default config per middleware, set at `Add` time with `WithMiddlewareConfigs(raw []byte)`. The format is a plain YAML **mapping** of middleware name to config block — not a list, since defaults carry no order; only router.yaml's middleware entries are a sequence, because attachment order matters there:
 
 ```yaml
-cors: true          # the server's built-in CORS: true | false | policy block
+cors: true          # the example's server-level cors middleware: true | false | policy block
 throttle:           # default for every bare `- throttle` attachment
   rps: 100.0
   burst_size: 200
@@ -362,12 +368,13 @@ authnuser:          # a name mapped to null carries a nil config
 
 Rules:
 
-- A middleware's block is what its `Func` receives wherever nothing more specific is configured — bare route entries fall back to it, and server-level middlewares (`WithMiddlewares`) are built with it in place of nil.
+- A middleware's block is what its `Func` receives wherever nothing more specific is configured — bare route entries fall back to it. A boolean value is the switch instead: `name: false` turns every bare attachment of that name off.
+- Server-level middlewares (`WithMiddlewares`) are **activated** by this mapping: no entry leaves one dormant, `name:` or `name: true` enables it with nil config, a block enables and configures, `name: false` switches it off. The roster and its order stay in code.
 - Invalid YAML fails `Add`; a block a middleware rejects fails `Add` (server-level) or `RegisterRouters` (route-level), naming the middleware.
-- Names are matched exactly; a typo'd name silently configures nothing — unlike router.yaml refs, which fail registration with `NotImplemented`.
+- Names are matched exactly; a typo'd name silently configures nothing — and for a server-level middleware it means the real name never gets an entry, so the middleware silently stays dormant. Router.yaml refs are safer: an unknown name fails registration with `NotImplemented`.
 - The example feeds this from `api.<name>.middlewares` in config.yaml (viper map → `yaml.Marshal` → `WithMiddlewareConfigs`); viper lowercases keys, so keep middleware names lowercase.
 
-CORS is one of the server's built-ins — browser protocol rather than app policy, sitting ahead of routing to answer preflight requests that match no route; `cors: true` in this mapping enables it, an `fapi.CORSConfig` policy block tightens it (unknown fields fail startup; `allow_credentials` requires explicit `allow_origins`), `false` or absent keeps it off. `cors` is the one name the server claims: a registered middleware reusing it would share its config block, so pick a different one. Rate limiting stays app-side: the example ships `example/pkg/middlewares/throttle`, attached through router.yaml with its limit per route via a config block or server-wide via this mapping.
+CORS is app-side: the example ships `example/pkg/middlewares/cors`, attached server-level with `WithMiddlewares(cors.New())` because preflight requests match no route. `cors: true` (or a bare `cors:`) in this mapping activates it with echo's permissive defaults; an `api.CORSConfig` policy block (the example's own type) activates and tightens it — unknown fields fail startup, `allow_credentials` requires explicit `allow_origins` — and no entry leaves it dormant, so a server without one (the example's health listener) serves without it. Rate limiting is the same story at route scope: `example/pkg/middlewares/throttle`, attached through router.yaml with its limit per route via a config block or server-wide via this mapping.
 
 ## Error Response Format
 

@@ -182,6 +182,12 @@ func (m *manager) initServices() error {
 				m.config.GetUint(fmt.Sprintf("api.%s.port", name)),
 				m.config.GetString(fmt.Sprintf("api.%s.prefix", name)),
 			),
+			// cors must see every request - a preflight OPTIONS matches no
+			// route - so it rides the server-level slot. The
+			// api.<name>.middlewares mapping activates it under "cors" and
+			// carries its policy; with no entry it stays dormant, so the
+			// health listener serves without it.
+			server.WithMiddlewares(corsmw.New()),
 		}
 		// Per-server middleware configs: a plain mapping of middleware name
 		// to its default config, re-marshaled to raw YAML for the server.

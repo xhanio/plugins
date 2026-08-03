@@ -34,7 +34,7 @@ import (
 )
 ```
 
-- `fapi` — **framingo's** `pkg/types/api`. Has `Router`, `Middleware`, `RequestInfo`, `CORSConfig`, `ErrorBody`, `ContextKeyCredential`. It has **no `Context` type**.
+- `fapi` — **framingo's** `pkg/types/api`. Has `Router`, `Middleware`, `RequestInfo`, `ErrorBody`, `ContextKeyCredential`. It has **no `Context` type**.
 - `api` — **your project's** `pkg/types/api`, which you own and can extend. Defines `Context`, `DiscoverHandlers`, `WrapHandler`, `WrapWebSocket`, and request/response DTOs.
 
 `api.Context` below always means the **project** one. Referring to it as a framingo type is a mistake — framingo ships no such interface.

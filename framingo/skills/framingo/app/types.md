@@ -9,7 +9,7 @@ list grows with the app: the example adds three more.
 
 | Directory | Layer | Holds | Consumed by |
 |---|---|---|---|
-| `types/api/` | api | Wire types: request/response DTOs, middleware config blocks (`ThrottleConfig` in `middleware.go`), plus `Context` + `DiscoverHandlers` in `api.go` | Routers, middlewares, clients |
+| `types/api/` | api | Wire types: request/response DTOs, middleware config blocks (`ThrottleConfig`, `CORSConfig` in `middleware.go`), plus `Context` + `DiscoverHandlers` in `api.go` | Routers, middlewares, clients |
 | `types/entity/` | service | Domain entities (business data, no ORM tags) — what services hand upward | Services; routers serialize them as responses |
 | `types/model/` | service | Service business interfaces (`model.Example` — methods + `common.Service`, no lifecycle) | Routers and other services — see [services.md](services.md) |
 | `types/orm/` | repo | DB models implementing the framework's ORM base interfaces ([types.md](../pkgs/types.md)) | `services/repository/`, [db.md](../pkgs/db.md) |
@@ -92,7 +92,7 @@ it to `entity.HelloWorld` and returns that.
 
 ## The two `api` packages
 
-- `fapi` — **framingo's** `pkg/types/api`: `Router`, `Middleware`, `RequestInfo`, `CORSConfig`, `Endpoint`, TLS types, `ErrorBody`, `WrapError`, `ContextKey*`. No `Context`.
-- `api` — **your project's** `pkg/types/api`: `Context`, `DiscoverHandlers`, DTOs, and middleware config block shapes (the example keeps `ThrottleConfig` there).
+- `fapi` — **framingo's** `pkg/types/api`: `Router`, `Middleware`, `RequestInfo`, `Endpoint`, TLS types, `ErrorBody`, `WrapError`, `ContextKey*`. No `Context`.
+- `api` — **your project's** `pkg/types/api`: `Context`, `DiscoverHandlers`, DTOs, and middleware config block shapes (the example keeps `ThrottleConfig` and `CORSConfig` there).
 
 Import both, framework one aliased `fapi` — full treatment in [routers.md](routers.md).
