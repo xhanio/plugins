@@ -20,7 +20,9 @@ services/example/
 The example groups its services in tiers, mirroring the server component's
 registration layers ([components-server.md](components-server.md)):
 `services/repository/` (data access — one service implementing every
-`types/repo/` interface plus `Transaction`), `services/system/` (auth, user,
+`types/repo/` interface plus `Transaction`, and the health probes:
+`Ready()` pings the database, `Alive()` guards only its own wiring —
+[supervisor.md](../pkgs/supervisor.md)), `services/system/` (auth, user,
 role, organization, certificate), and business services such as
 `services/example/` on top. System and business services take
 `repository.Repository`, never `db.Manager` — only the repository touches
@@ -209,6 +211,44 @@ func (m *manager) Stop(wait bool) error {
 	return nil
 }
 ```
+
+## Health Probes
+
+Implement `common.Liveness`/`common.Readiness` when the service has
+something real to report — the repository is the worked example
+(`services/repository/health.go`, interface halves declared in its
+`model.go` under a `// health.go` comment):
+
+```go
+// Alive: the service's own wiring ONLY. A liveness failure makes the
+// supervisor restart this service, and no repository restart fixes an
+// unreachable database - that is Ready's story.
+func (m *manager) Alive(_ context.Context) error {
+	if m.db == nil || m.db.DB() == nil {
+		return errors.Newf("repository has no database handle")
+	}
+	return nil
+}
+
+// Ready: "can it serve right now" - derive from the caller's context,
+// capping it, never fabricating a fresh one.
+func (m *manager) Ready(ctx context.Context) error {
+	if m.db == nil || m.db.DB() == nil {
+		return errors.Newf("repository has no database handle")
+	}
+	ctx, cancel := context.WithTimeout(ctx, healthCheckTimeout)
+	defer cancel()
+	if err := m.db.DB().PingContext(ctx); err != nil {
+		return errors.Wrapf(err, "database ping failed")
+	}
+	return nil
+}
+```
+
+The rule that decides what goes where: **`Alive` fails only if a restart
+would fix it; a dependency outage fails `Ready`, never `Alive`.** The full
+split table, monitor semantics, and the escalation ladder:
+[supervisor.md](../pkgs/supervisor.md).
 
 ## `business.go`
 

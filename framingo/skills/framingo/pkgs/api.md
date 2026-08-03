@@ -68,6 +68,16 @@ srvMgr.RegisterMiddlewares(authMiddleware, deflateMiddleware)
 srvMgr.RegisterRouters(myRouter)
 ```
 
+`Start` launches each listener in its own goroutine and returns immediately —
+it does **not** confirm binds. The manager implements `common.Liveness` and
+`common.Readiness` instead: each server records why its serve loop exited,
+and a listener that stopped serving (failed bind, dead socket) fails both
+probes, naming itself. Both verdicts are the same check on purpose — a
+restart fixes a dead listener (`Init` rebuilds the echo instances and
+re-binds), so it's liveness-fixable, and it's equally not ready for traffic.
+The supervisor's monitor picks this up like any other service's probes
+([supervisor.md](supervisor.md)).
+
 ## Implementing a Router
 
 A Router provides two things: a YAML config declaring routes, and a map of handler function implementations. The YAML `func` field is the lookup key into the `Handlers()` map.

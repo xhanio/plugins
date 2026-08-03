@@ -48,7 +48,7 @@ Available in `pkg/structs/`:
 - `graph/` - Generic directed graph with topological sort
 - `buffer/` - Ring buffer with pooling
 - `queue/` - FIFO queue
-- `staque/` - Hybrid stack/queue with priority
+- `staque/` - Hybrid stack/queue with priority; items implement `staque.PriorityItem` = `common.Unique` + `common.Weighted` (ordered by priority, `Key()` as tiebreak)
 - `trie/` - Prefix tree for string matching
 - `lease/` - Time-based lease management
 

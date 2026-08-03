@@ -303,6 +303,7 @@ func (m *manager) initAPI() error {
 	}
 	routers := []api.Router{
 		exampleRouter.New(m.example, m.log),
+		healthRouter.New(m.services, m.log), // /healthz + /readyz on the health listener
 		authRouter.New(m.auth, m.role, m.log),
 		userRouter.New(m.user, m.role, m.auth, m.log),
 		roleRouter.New(m.role, m.log),

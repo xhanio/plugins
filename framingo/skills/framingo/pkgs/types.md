@@ -3,7 +3,7 @@
 What framingo's own `pkg/types/` tree provides. The five `types/`
 subdirectories a project keeps are the app half — [types.md](../app/types.md).
 
-- `pkg/types/common` — the service/lifecycle interfaces ([supervisor.md](supervisor.md)), message interfaces, context keys, `Pair`.
+- `pkg/types/common` — the service/lifecycle interfaces and the identity trio `Named`/`Unique`/`Weighted` ([supervisor.md](supervisor.md)), message interfaces, context keys, `Pair`, and shared constants (`TimeFormat`, `RedactMask`).
 - `pkg/types/api` (always imported aliased `fapi`) — `Router`, `Middleware`, `RequestInfo`, `CORSConfig`, `Endpoint`, TLS types, `ErrorBody`, `WrapError`, `ContextKey*`. **No `Context`** — the handler context is project-owned ([routers.md](../app/routers.md)).
 - `pkg/types/model` — framework service interfaces: `Supervisor`, `Database`, `Pubsub`, `MessageBus`, `Planner`.
 - `pkg/types/entity` — framework entities (supervisor stats, task/plan records).

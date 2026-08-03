@@ -56,7 +56,7 @@ pkg/
 │   ├── repository/              # data access — implements every types/repo interface
 │   ├── system/                  #   auth/ certificate/ organization/ role/ user/
 │   └── example/                 # business tier
-├── routers/                     # auth/ certificate/ example/ messagebus/ role/ user/
+├── routers/                     # auth/ certificate/ example/ health/ messagebus/ role/ user/
 │   └── example/                 #   router.go, router.yaml, handler.go, router_test.go
 ├── middlewares/                 # authnagent/ authnuser/ authz/ deflate/ feature/ throttle/
 │   └── throttle/                #   middleware.go (+ option.go where configurable)

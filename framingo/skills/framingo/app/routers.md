@@ -8,9 +8,17 @@ WebSockets — see [api.md](../pkgs/api.md).
 Routes are defined declaratively: each `fapi.Router` ships an embedded
 `router.yaml` plus a `Handlers()` map; the server manager binds them at
 registration time. Each package splits into `router.go` (wiring) and
-`handler.go` (handler bodies). The example ships six —
-`auth`, `certificate`, `example`, `messagebus`, `role`, `user` — and
-`routers/example` is the smallest, so it is quoted below in full. Templates:
+`handler.go` (handler bodies). The example ships seven —
+`auth`, `certificate`, `example`, `health`, `messagebus`, `role`, `user` —
+and `routers/example` is the smallest business one, so it is quoted below in
+full. (`routers/health` mounts `/healthz` + `/readyz` on the dedicated
+`health` listener: `Healthz` follows `supervisor.Alive()` — red only when
+recovery is spent — and `Readyz` follows `supervisor.Ready()`, itemizing the
+not-ready services. Since the probes live on `supervisor.Manager` — model
+interfaces stay lifecycle-free — the router declares its own narrow
+`Supervisor` interface (the two verdicts + `Stats`), which
+`supervisor.Manager` satisfies. It takes no middlewares and declares no
+dependencies — the supervisor can't be a node in its own graph.) Templates:
 [`_templates/router.go`](../_templates/router.go),
 [`_templates/handler.go`](../_templates/handler.go),
 [`_templates/router.yaml`](../_templates/router.yaml).
@@ -80,8 +88,9 @@ type categories: it binds a `types/api` DTO and returns what the service
 hands back — a `types/entity` value, serialized as JSON. It calls the
 service level through `model.Example` and nothing lower: no
 `services/repository/`, no `types/orm/`, no `db`. The constructor is the
-boundary — all six example routers take only `model.*` interfaces and a
-logger ([layout.md](layout.md)). And the DTO and the `model.*` method are
+boundary — every example router takes only `model.*` interfaces and a
+logger ([layout.md](layout.md)); the health router's is framingo's own
+`model.Supervisor`. And the DTO and the `model.*` method are
 designed before the handler is written — [types.md](types.md).
 
 Same for WebSocket handlers: `func(c api.Context, conn *websocket.Conn) error`.
@@ -181,7 +190,7 @@ component registered ([components-server.md](components-server.md)).
 ## `Handlers()` — always `DiscoverHandlers`
 
 Every router's `Handlers()` has the same three lines, verbatim across all
-six example routers. It reflects over the receiver, keys handlers by method
+seven example routers. It reflects over the receiver, keys handlers by method
 name (matching `func:` in that package's `router.yaml`), and wraps each
 `func(api.Context) error` into `echo.HandlerFunc`. Adding a handler = write
 the method in `handler.go` + add a `func:` entry to `router.yaml`. Nothing

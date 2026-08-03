@@ -1,11 +1,11 @@
 ---
 name: framingo
 description: Use when working with Framingo (`github.com/xhanio/framingo`) Go code — bootstrapping a new framingo backend project, creating services, registering with the supervisor, configuring HTTP servers/routers, the database service, pub/sub messaging, or implementing service lifecycle interfaces. Triggers on mentions of framingo, "new Go backend", service lifecycle, supervisor, handler groups, or any framingo package imports.
-compatibility: Requires Go 1.24+. Documents github.com/xhanio/framingo v0.6.4 — where the repo's go.mod pins a different framingo version, trust the code over this prose.
+compatibility: Requires Go 1.24+. Documents github.com/xhanio/framingo v0.6.5 — where the repo's go.mod pins a different framingo version, trust the code over this prose.
 metadata:
   author: xhanio
-  version: "1.3.2" # mirrors plugin.json; bump both together
-  framingo: v0.6.4 # the framework version these docs describe
+  version: "1.3.3" # mirrors plugin.json; bump both together
+  framingo: v0.6.5 # the framework version these docs describe
 ---
 
 # Framingo - Service-Oriented Go Framework
@@ -36,7 +36,7 @@ One file per concept, in two halves — `pkgs/` is how to **use framingo's packa
 
 | File | Covers |
 |---|---|
-| [pkgs/supervisor.md](pkgs/supervisor.md) | Lifecycle interfaces, supervisor orchestration, config-from-context |
+| [pkgs/supervisor.md](pkgs/supervisor.md) | Lifecycle interfaces, supervisor orchestration, health probes & escalation, config-from-context |
 | [pkgs/api.md](pkgs/api.md) | The API server: registration flow, router.yaml schema, middleware model + configs, WebSockets, error format |
 | [pkgs/client.md](pkgs/client.md) | The framework HTTP client (`api/client`): requests, encoding, global headers |
 | [pkgs/db.md](pkgs/db.md) | `db.Manager`: drivers, options, transactions, dynamic pool config |
@@ -52,7 +52,7 @@ One file per concept, in two halves — `pkgs/` is how to **use framingo's packa
 | File | Covers |
 |---|---|
 | [app/layout.md](app/layout.md) | The categorized `pkg/` layout, the three-layer access rule, import order |
-| [app/services.md](app/services.md) | Writing a service: interface-in-two-places, `New`/`newManager`, options |
+| [app/services.md](app/services.md) | Writing a service: interface-in-two-places, `New`/`newManager`, options, health probes |
 | [app/routers.md](app/routers.md) | Authoring routers: the `router.go`/`handler.go`/`router.yaml` triple, the two `api` packages, project `api.Context`, `DiscoverHandlers` |
 | [app/middlewares.md](app/middlewares.md) | Authoring `api.Middleware`: the `Func(config)` contract, config-free vs configured, decline, attachment |
 | [app/types.md](app/types.md) | The project's `types/` categories, which layer owns each, the types-first design order, the two `api` packages |
@@ -133,6 +133,7 @@ Either route, the reference map above is the per-concept guide for the work insi
 | Logging | `pkg/utils/log` | `log.Logger` | [pkgs/utils.md](pkgs/utils.md) |
 | Errors | `github.com/xhanio/errors` | `errors.Newf`, `errors.Wrap`, category sentinels | [pkgs/errors.md](pkgs/errors.md) |
 | Config | `pkg/utils/confutil` | `confutil.FromContext(ctx)` | [pkgs/supervisor.md](pkgs/supervisor.md), [pkgs/config.md](pkgs/config.md) |
+| Health probes | `pkg/types/common` | `Liveness`/`Readiness` — `Alive(ctx)`/`Ready(ctx)`; served at `/healthz` + `/readyz` by the example's health router | [pkgs/supervisor.md](pkgs/supervisor.md), [app/services.md](app/services.md) |
 
 ## Architecture
 
@@ -194,6 +195,7 @@ For the full category rules, type-separation example, server component file stru
 - `db.WithConnection` takes **five** args (`maxOpen, maxIdle, maxLifetime, maxIdleTime, execTimeout`); the four-arg form doesn't compile.
 - Every `func:` in `router.yaml` needs a matching method, or registration fails at startup with `handler function <Name> not found in router.Handlers()`. Middleware names must be registered first, or `middleware <name> not found`.
 - Don't use the global Viper singleton — use the instance passed via `context.Context` (`confutil.FromContext(ctx)`).
+- Don't fail `Alive` on a dependency outage — restarting the service raises no database; that fails `Ready` only. And probes take the caller's ctx: derive (`context.WithTimeout(ctx, cap)`), never fabricate from `Background()`.
 - After `echo.Shutdown` is called, the same echo instance can't be reused — the framework's api server rebuilds it on `Init`, but custom services must do the same if they wrap net/http servers.
 
 ## Key Patterns
@@ -209,3 +211,4 @@ For the full category rules, type-separation example, server component file stru
 9. **Import Order** - Three groups: stdlib, third-party, project — always separated by blank lines
 10. **Layered Access** - the api level (routers, middlewares) calls services only; services persist through the repo level only; only `services/repository/` touches the database
 11. **Types First** - for a new feature, design `types/*` (api → entity/model → orm/repo) before implementing the router, service, or repo
+12. **Probe Split** - `Alive(ctx)` fails only if a restart would fix it; `Ready(ctx)` means "can it serve right now"; a dependency outage fails readiness, never liveness

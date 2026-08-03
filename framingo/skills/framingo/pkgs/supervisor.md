@@ -18,10 +18,33 @@ type Service interface {
 // Optional lifecycle interfaces - implement as needed
 type Initializable interface { Init(ctx context.Context) error }       // setup (called on start AND restart)
 type Daemon interface { Start(ctx context.Context) error; Stop(wait bool) error }  // long-running
-type Liveness interface { Alive() error }                              // health probe (failure = auto-restart)
-type Readiness interface { Ready() error }                             // readiness probe (failure = reported only)
+type Liveness interface { Alive(ctx context.Context) error }           // health probe (failure = auto-restart)
+type Readiness interface { Ready(ctx context.Context) error }          // readiness probe (failure = reported only)
+// Probes take the caller's context - probes may do I/O (a database ping), and
+// the caller owns the deadline and shutdown signal. Implementations may layer
+// a tighter timeout on top, never a looser one.
 type Debuggable interface { Info(w io.Writer, debug bool) }            // debug output
 ```
+
+### Identity interfaces
+
+`pkg/types/common` also defines three small identity interfaces that
+services and their satellites lean on:
+
+```go
+type Named interface { Name() string }                    // embedded in Service
+type Unique interface { Key() string }                    // stable dedup/ordering key
+type Weighted interface { GetPriority() int; SetPriority(priority int) }
+```
+
+- `Named` is the currency of identity everywhere: `log.Logger.By(caller
+  common.Named)` is why every constructor ends with `m.log = m.log.By(m)`,
+  `messagebus.Register(module common.Named)` takes it, and the supervisor's
+  dependency graph (`pkg/structs/graph`) is generic over it.
+- `Unique` + `Weighted` together form `staque.PriorityItem` — the contract
+  of the priority stack/queue ([utils.md](utils.md)). `task.Task` implements
+  both, which is how the task manager orders its queue: by priority, then by
+  `Key()` as the tiebreak.
 
 ## Supervisor
 
@@ -51,7 +74,7 @@ mgr.Start(ctx)
 Full signature set — `Register` and `TopoSort` differ in whether they return an error, so don't guess:
 
 ```go
-type Manager interface {          // = model.Supervisor + Initializable + Daemon + Debuggable
+type Manager interface {          // = model.Supervisor + health + Initializable + Daemon + Debuggable
     Name() string
     Dependencies() []common.Service
     Register(services ...common.Service)          // no return value
@@ -63,6 +86,9 @@ type Manager interface {          // = model.Supervisor + Initializable + Daemon
     Start(ctx context.Context) error
     Stop(wait bool) error
     Info(w io.Writer, debug bool)
+
+    Alive(ctx context.Context) error              // health, on Manager not model.Supervisor: fails only when recovery is spent (a service dead with restarts exhausted)
+    Ready(ctx context.Context) error              // health: the roll-up, nil iff every registered service is ready
 
     InitService(ctx context.Context, name string) error
     StartService(name string) error
@@ -76,8 +102,47 @@ The manager:
 - Resolves dependencies via topological sort
 - Calls `Init(ctx)` on `Initializable` services in dependency order
 - Calls `Start(ctx)` on `Daemon` services
-- Monitors `Liveness` and `Readiness` probes; only liveness failure triggers restart (readiness is reported only)
+- Monitors `Liveness` and `Readiness` probes — see [Health Probes & Escalation](#health-probes--escalation) below
 - Restart behaviour tunes via `WithMonitorInterval`, `WithRestartPolicy(maxRetries)`, `WithRestartDelay`, `WithShutdownTimeout`
+
+## Health Probes & Escalation
+
+One rule decides what goes in which probe, everywhere: **`Alive` fails only
+if a restart would fix it; `Ready` means "can it serve right now".** A
+dependency outage is the classic trap — the repository must not fail
+liveness when the database is unreachable, because restarting the
+repository raises no database; it fails readiness instead. Every
+implementer in the tree keeps that split:
+
+| Implementer | `Alive(ctx)` fails when (restart is the remedy) | `Ready(ctx)` fails when (stop routing traffic) |
+|---|---|---|
+| `db.Manager` | no connection handle (`Init` reconnects) | database ping fails |
+| api server manager | a listener stopped serving (`Init` rebuilds echo and re-binds) | same — not accepting = not ready |
+| example `repository` | no database handle | database ping fails |
+| the supervisor itself | recovery spent: a service failing liveness with restarts exhausted | any registered service not ready (the roll-up) |
+
+How the monitor consumes them:
+
+- **Each sweep probes every service exactly once.** A shared dependency is
+  checked once and its result reused by every dependent, with failures
+  still rolling up into each dependent's healthcheck error.
+- **Only liveness failure triggers restart**; readiness is reported. The
+  probe context is the monitor's own — cancellation at shutdown reaches a
+  ping in flight.
+- **`WithRestartPolicy(maxRetries)` sets the escalation regime**:
+  `n > 0` restarts up to n times, then the supervisor gives up — and its
+  own `Alive()` goes red; `0` disables in-process restarts, so a liveness
+  failure escalates immediately (the platform is the recovery path);
+  `-1` retries forever and never escalates.
+
+The supervisor's own verdicts live on `supervisor.Manager` beside its
+lifecycle half — model interfaces stay lifecycle-free, and the example's
+health router consumes them through its own narrow interface
+([routers.md](../app/routers.md)). That completes the escalation ladder:
+service restart is the supervisor's job, pod restart is the platform's —
+`Ready()` feeds `/readyz` (stop routing, keep the pod), `Alive()` feeds
+`/healthz` (replace the pod). Writing probes for your own service:
+[services.md](../app/services.md).
 
 **The supervisor does NOT install signal handlers.** There is no `os/signal` anywhere in framingo. Trapping SIGINT/SIGTERM/SIGHUP/SIGUSR1/SIGUSR2 and calling `Stop`/`Restart` is application code you write in `pkg/components/server/<app>/signal.go` — see [layout.md](../app/layout.md).
 

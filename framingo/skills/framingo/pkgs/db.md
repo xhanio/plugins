@@ -64,6 +64,8 @@ type Source struct {
 ```go
 type Manager interface {
     common.Service
+    common.Liveness      // Alive: guards the manager's wiring only (Init reconnects, so restart is the remedy)
+    common.Readiness     // Ready: pings the database - an unreachable server is not-ready, never a liveness failure
     common.Initializable
     common.Debuggable
     ORM() *gorm.DB                                                              // raw GORM access
