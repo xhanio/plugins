@@ -1,6 +1,11 @@
 ---
 name: zen-knowledge-capture
 description: Use when working in the zen repo and we generate knowledge worth preserving — both long-form notes and focused decisions / tradeoffs / gotchas / patterns become Zen Cards (optionally decomposed into children) so the user can browse and search them later from Zen's web UI. Also use when the user asks to "ingest" a document file into Zen. Captures domain knowledge, NOT how-to-work-with-this-user feedback (that goes in auto-memory).
+compatibility: Requires the zen MCP server reachable at $ZEN_MCP_URL (default http://localhost:38000/api/v1/mcp), which supplies the card/group/tag tools this skill calls. Documents Zen v1.2.0 — where the running server differs, trust the tool schemas over this prose.
+metadata:
+  author: xhanio
+  version: "1.2.0" # mirrors plugin.json; bump both together
+  zen: v1.2.0 # the zen version these docs describe
 ---
 
 # Zen Knowledge Capture

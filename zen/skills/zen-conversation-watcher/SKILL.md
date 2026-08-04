@@ -1,6 +1,11 @@
 ---
 name: zen-conversation-watcher
 description: Use when handling <channel source="zen"> events arriving in this Claude Code session. Describes the event-response decision tree, the reply-after-mutation audit rule, and the anchor-bounded action scope. Active automatically when this plugin is installed and the session was started with --dangerously-load-development-channels plugin:zen@xhanio.
+compatibility: Requires the `zen-channel` binary on PATH and a reachable zen-backend. Events only arrive when Claude Code is started with `--dangerously-load-development-channels plugin:zen@xhanio` — channels are a research preview, and that flag must be passed alone, never alongside `--channels`. Documents Zen v1.2.0.
+metadata:
+  author: xhanio
+  version: "1.2.0" # mirrors plugin.json; bump both together
+  zen: v1.2.0 # the zen version these docs describe
 ---
 
 # Zen Conversation Watcher (channel mode)
