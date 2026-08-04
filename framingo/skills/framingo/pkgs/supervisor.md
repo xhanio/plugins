@@ -59,7 +59,7 @@ import (
 // Create manager with viper config
 mgr := supervisor.New(config,
     supervisor.WithLogger(logger),
-    supervisor.WithMonitorInterval(30 * time.Second),
+    supervisor.WithMonitorPolicy(30*time.Second, 3, 0), // sweep cadence, restarts per service, restart delay
 )
 
 // Register services (order doesn't matter - topologically sorted)
@@ -80,7 +80,7 @@ type Manager interface {          // = model.Supervisor + health + Initializable
     Register(services ...common.Service)          // no return value
     TopoSort() error
     Services() []common.Service
-    Stats() ([]*entity.SupervisorStats, error)
+    Stats() ([]*entity.SupervisorStats, error)    // point-in-time copies, topological order: dependencies above dependents
 
     Init(ctx context.Context) error
     Start(ctx context.Context) error
@@ -100,10 +100,43 @@ type Manager interface {          // = model.Supervisor + health + Initializable
 
 The manager:
 - Resolves dependencies via topological sort
-- Calls `Init(ctx)` on `Initializable` services in dependency order
+- Calls `Init(ctx)` on `Initializable` services in dependency order — optionally waiting for dependencies, see [Waiting at Init](#waiting-at-init) below
 - Calls `Start(ctx)` on `Daemon` services
 - Monitors `Liveness` and `Readiness` probes — see [Health Probes & Escalation](#health-probes--escalation) below
-- Restart behaviour tunes via `WithMonitorInterval`, `WithRestartPolicy(maxRetries)`, `WithRestartDelay`, `WithShutdownTimeout`
+- Monitoring and restarts tune via `WithMonitorPolicy(interval, maxRetries, restartDelay)` — sweep cadence (0, the default, disables monitoring), in-process restarts per service, pause before each restart; `WithStopPolicy(timeout)` bounds the whole shutdown (0, the default, waits indefinitely)
+
+## Waiting at Init
+
+By default `Init` is one pass: each service's turn checks only that its
+dependencies' `Init` succeeded, and fails otherwise — no probing, no
+waiting. `WithInitPolicy` turns each turn into a bounded retry loop for
+slow-starting infrastructure (a database still bootstrapping when the
+process boots):
+
+```go
+mgr := supervisor.New(config,
+    // maxRetries: 0 off (default), n retries, -1 until ctx cancels;
+    // the wait starts at 1s and doubles up to 30s
+    supervisor.WithInitPolicy(-1, time.Second, 30*time.Second),
+)
+```
+
+With the policy on, a turn waits until every dependency is *init-ready* —
+its `Init` succeeded **and**, if it implements `Readiness`, its
+`Ready(ctx)` probe answers nil — then runs the service's own `Init`. Both
+blockages are transient and retry with the backoff: a dependency whose
+ping hasn't answered yet, and the service's *own* failing `Init`, which
+retries at its own turn. Because the walk is topological, a dependency
+always resolves at its own turn first — no service ever re-runs another
+service's `Init`; dependents only observe. A dependency that exhausted a
+bounded policy is permanent, and dependents fail fast with "dependencies
+not ready" instead of burning their own budget.
+
+For bootstrap-style dependencies prefer `WithInitPolicy(-1)`: during init
+there is no traffic to protect, and giving up after k tries just moves
+the retry to the platform as a crash loop. The bound still exists twice —
+the `Init` context (your signal handler cancels it, and cancellation cuts
+a wait short mid-delay) and the platform's own startup timeout.
 
 ## Health Probes & Escalation
 
@@ -129,7 +162,7 @@ How the monitor consumes them:
 - **Only liveness failure triggers restart**; readiness is reported. The
   probe context is the monitor's own — cancellation at shutdown reaches a
   ping in flight.
-- **`WithRestartPolicy(maxRetries)` sets the escalation regime**:
+- **`WithMonitorPolicy`'s maxRetries sets the escalation regime**:
   `n > 0` restarts up to n times, then the supervisor gives up — and its
   own `Alive()` goes red; `0` disables in-process restarts, so a liveness
   failure escalates immediately (the platform is the recovery path);
