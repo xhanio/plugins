@@ -1,11 +1,11 @@
 ---
 name: gopro
 description: Use when a project has a project.yaml or uses the gopro command; when building Go binaries or Docker images across environments; when cross-compiling for multiple platforms or setting per-target build env; when generating config, Kubernetes, or Docker Compose templates; when scaffolding a Go project structure; or when handling secret.env and config.yaml in env/ directories.
-compatibility: Requires Go 1.24+, git, and optionally Docker. Install with go install github.com/xhanio/gopro@latest. Documents github.com/xhanio/gopro v0.1.10 — where the installed gopro differs, trust `gopro <command> --help` over this prose.
+compatibility: Requires Go 1.24+, git, and optionally Docker. Install with go install github.com/xhanio/gopro@latest. Documents github.com/xhanio/gopro v0.1.11 — where the installed gopro differs, trust `gopro <command> --help` over this prose.
 metadata:
   author: xhanio
-  version: "1.1.0" # mirrors plugin.json; bump both together
-  gopro: v0.1.10 # the tool version these docs describe
+  version: "1.2.0" # mirrors plugin.json; bump both together
+  gopro: v0.1.11 # the tool version these docs describe
 ---
 
 # GoPro - Go Project Generator and Build Tool
@@ -89,6 +89,7 @@ env:
 build:
   binaries:
     - name: api
+      version: v1.2.3               # Optional: app version, defaults to product version
       src: cmd/api                  # Optional custom source path
       config_dir: /etc/api          # For template functions
       build_env: [CGO_ENABLED=0]    # Optional: MERGED over binary_build_env
@@ -410,9 +411,10 @@ gopro build binary -e local
 go build -o myapp ./cmd/myapp
 ```
 
-Thirteen fields are injected: `ProductName`, `ProductModel`, `ProductVersion`,
-`BuildVersion`, `BuildType`, `BuildDate`, `BuildTime`, `GitBranch`, `GitTag`,
-`GitCommit`, `ProjectName`, `ProjectPath`, and `ProjectRoot`. They are set on
+Fifteen fields are injected: `ApplicationName`, `ApplicationVersion`,
+`ProductName`, `ProductModel`, `ProductVersion`, `BuildVersion`, `BuildType`,
+`BuildDate`, `BuildTime`, `GitBranch`, `GitTag`, `GitCommit`, `ProjectName`,
+`ProjectPath`, and `ProjectRoot`. They are set on
 `github.com/xhanio/framingo/pkg/types/info` package vars and readable at runtime
 (e.g. via `gopro version`). The `--product-model`, `--product-version`,
 `--build-version`, `--build-type`, and `--build-date` flags each override the
