@@ -33,6 +33,23 @@ db:
     max_idle_time: 30m        # idle connection max lifetime
     exec_timeout: 30s         # query execution timeout
 
+# Tracing (OpenTelemetry) — read in tracing.Manager.Init(ctx), so changes
+# apply on service restart
+tracing:
+  enabled: false              # the tracing switch - naming an exporter does not turn it
+                              # on; disabled serves a noop provider (spans are free)
+  exporter: stdout            # otlpgrpc | otlphttp | stdout — the matching
+                              # pkg/services/tracing/exporters/* subpackage must be blank-imported
+  sample_ratio: 1.0           # ParentBased(TraceIDRatioBased)
+                              # service.name/version are NOT configurable at all: they are
+                              # the build's ApplicationName/ApplicationVersion
+  # config:                   # exporter-specific kv block — opaque to the manager,
+  #   endpoint: localhost:4317   # strict-decoded by the chosen exporter's factory,
+  #   insecure: true             # so a typo'd key fails startup (otlp keys shown;
+  #   compression: gzip          # stdout takes pretty/timestamps instead)
+  #   timeout: 10s
+  #   retry: { initial_interval: 5s }
+
 # API servers — iterated by m.config.GetStringMap("api") in service.go
 # Each key becomes a named server instance via m.api.Add(name, ...)
 api:
@@ -45,11 +62,13 @@ api:
     port: 8080
     prefix: /api/v1           # server endpoint path
     middlewares:              # optional: per-middleware default configs - a
-      cors: true              # plain mapping, unordered; each block reaches
-      throttle:               # its middleware wherever nothing more specific
-        rps: 100.0            # is configured (router.yaml overrides per group
-        burst_size: 200       # or handler). "cors: true" drives the example's
-                              # server-level cors middleware
+      trace: true             # plain mapping, unordered; each block reaches
+      cors: true              # its middleware wherever nothing more specific
+      throttle:               # is configured (router.yaml overrides per group
+        rps: 100.0            # or handler). "trace: true" activates the
+        burst_size: 200       # framework's tracing middleware, "cors: true"
+                              # the example's server-level cors middleware; no
+                              # entry (see the health server) leaves one dormant
   admin:                      # server name: "admin"
     host: 0.0.0.0
     port: 9090
@@ -84,3 +103,4 @@ pprof:
 - `api.<name>.middlewares` is passed to `server.WithMiddlewareConfigs` as each middleware's per-server default config; a router.yaml entry carrying its own block still wins (handler over group over server). Server-level middlewares (`WithMiddlewares`) are activated by the same mapping — an entry enables (`cors: true`, `cors:`, or a policy block), no entry leaves one dormant, and booleans anywhere in the mapping are switches, not config, arriving as `Func`'s `enabled` argument; the lifecycle built-ins take no config and claim no names. Names in this mapping are matched exactly and a typo'd one silently configures nothing (unlike router.yaml refs, which fail registration); viper lowercases keys, so keep middleware names lowercase. YAML 1.1 truthiness applies — `cors: yes`/`on` enable it too
 - Custom service config keys are accessed in `Init(ctx)` via `confutil.FromContext(ctx).GetString("myservice.key")`
 - Pubsub, messagebus, and planner services are configured entirely via functional options, not YAML keys
+- `tracing.*` keys are read dynamically in `tracing.Manager.Init(ctx)` — a set key wins over the constructed options and stays sticky across restarts until overridden. Per-server activation is the standard middleware mapping: `trace: true` under `api.<name>.middlewares` enables the framework's tracing middleware on that server ([tracing.md](tracing.md))

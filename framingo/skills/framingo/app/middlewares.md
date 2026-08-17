@@ -41,15 +41,51 @@ type Middleware interface {
 }
 ```
 
-The name comes from the package path — that's what router.yaml refers to —
-and every middleware pins the contract at compile time:
+The name defaults to the package name (`nameutil.Package`) — that's what
+router.yaml refers to — with a `WithName` option to rename an attachment:
+config keys follow the name, so two differently-named instances of the same
+middleware can run side by side, each activated and configured under its own
+key. Every middleware pins the contract at compile time:
 
 ```go
 var _ fapi.Middleware = (*middleware)(nil)
 
+type middleware struct {
+	name string
+}
+
+func New(opts ...Option) fapi.Middleware {
+	m := &middleware{}
+	m.applyOptions(opts...)
+	m.setDefaults()
+	return m
+}
+
 func (m *middleware) Name() string {
-	pkg, _ := reflectutil.Locate(m)
-	return path.Base(pkg) // package name == middleware name
+	return m.name
+}
+
+// option.go
+type Option func(*middleware)
+
+func (m *middleware) applyOptions(opts ...Option) {
+	for _, opt := range opts {
+		opt(m)
+	}
+}
+
+// setDefaults fills what the options left zero, so a zero field means the
+// caller said nothing - which a struct-literal seed could never tell.
+func (m *middleware) setDefaults() {
+	if m.name == "" {
+		m.name = nameutil.Package(m) // package name == middleware name
+	}
+}
+
+func WithName(name string) Option {
+	return func(m *middleware) {
+		m.name = name
+	}
 }
 ```
 
@@ -59,13 +95,17 @@ its constructor and declares them, exactly like a router —
 ```go
 // middlewares/authz/middleware.go
 type middleware struct {
+	name string
 	role role.Manager
 }
 
-func New(role role.Manager) fapi.Middleware {
-	return &middleware{
+func New(role role.Manager, opts ...Option) fapi.Middleware {
+	m := &middleware{
 		role: role,
 	}
+	m.applyOptions(opts...)
+	m.setDefaults()
+	return m
 }
 
 func (m *middleware) Dependencies() []common.Service {

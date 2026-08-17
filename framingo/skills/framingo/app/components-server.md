@@ -45,6 +45,7 @@ type manager struct {
 	log log.Logger
 
 	// infra services
+	tracing    tracing.Manager
 	db         db.Manager
 	pubsub     pubsub.Manager
 	messagebus messagebus.Manager
@@ -131,6 +132,9 @@ func (m *manager) initServices() error {
 
 	/* init infra level services */
 
+	// all further tracing config arrives via the tracing.* keys in Init
+	m.tracing = tracing.New(tracing.WithLogger(m.log))
+
 	m.db = db.New(
 		db.WithType(m.config.GetString("db.type")),
 		db.WithDataSource(db.Source{
@@ -185,7 +189,10 @@ func (m *manager) initServices() error {
 			// api.<name>.middlewares mapping activates it under "cors" and
 			// carries its policy; with no entry it stays dormant, so the
 			// health listener serves without it.
-			server.WithMiddlewares(corsmw.New()),
+			// trace first, so its span covers the middlewares behind it;
+			// each activates per server via the api.<name>.middlewares
+			// mapping - no entry (the health listener) leaves it dormant
+			server.WithMiddlewares(tracemw.New(m.tracing), corsmw.New()),
 		}
 		// Per-server middleware configs: a plain mapping of middleware name
 		// to its default config, re-marshaled to raw YAML for the server.
@@ -228,8 +235,9 @@ func (m *manager) Init(ctx context.Context) error {
 		return errors.Wrap(err)
 	}
 
-	// register basic services
-	m.services.Register(m.db)
+	// register basic services; tracing first — stop runs in reverse, so it
+	// flushes last, after the draining api server's final requests
+	m.services.Register(m.tracing, m.db)
 	// register system services
 	m.services.Register(m.pubsub, m.messagebus, m.repository,
 		m.user, m.role, m.organization, m.certificate, m.auth)

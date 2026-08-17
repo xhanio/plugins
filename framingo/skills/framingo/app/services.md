@@ -12,7 +12,7 @@ reference implementation — every snippet below is lifted from it.
 services/example/
 ├── model.go     # Manager — the exported interface: model.Example + lifecycle
 ├── manager.go   # unexported struct, New()/newManager(), Name(), Dependencies()
-├── option.go    # Option, apply(), WithLogger, With<Dynamic>…
+├── option.go    # Option, applyOptions(), setDefaults(), WithLogger, With<Dynamic>…
 ├── business.go  # the business methods — model.Example's contract
 └── lifecycle.go # Init/Start/Stop/Info
 ```
@@ -101,17 +101,13 @@ func New(repo repository.Repository, mb common.RawMessageSender, opts ...Option)
 // newManager returns the concrete manager, the form package tests construct.
 func newManager(repo repository.Repository, mb common.RawMessageSender, opts ...Option) *manager {
 	m := &manager{
-		log:        log.Default,
 		repository: repo,
 		mb:         mb,
 		wg:         &sync.WaitGroup{},
 	}
-	m.apply(opts...)
-	m.name = nameutil.Name(m)
+	m.applyOptions(opts...)
+	m.setDefaults()
 	m.log = m.log.By(m)
-	if m.ctx == nil {
-		m.ctx = context.Background()
-	}
 	return m
 }
 
@@ -128,13 +124,21 @@ project prefix is judged from the gopro-injected `info.ProjectPath`;
 binaries built without it (plain `go build`, `go test`) fall back to the
 full import path.
 
-The name is fixed at construction, in exactly this position: after
-`apply(opts...)` and before `log.By(m)`, which reads it. Guard with
-`if m.name == ""` only when the package offers a `WithName` option to
-respect (framingo's supervisor, db, pubsub, messagebus, and planner
-do); with no way to preset the name, assign directly. `Name()` is a
-plain getter — never compute the name lazily inside it; a getter that
-writes state is a data race waiting for its first concurrent caller.
+The name is fixed at construction, in exactly this position: inside
+`setDefaults()`, which runs after `applyOptions(opts...)` and before
+`log.By(m)`, which reads it. `Name()` is a plain getter — never compute
+the name lazily inside it; a getter that writes state is a data race
+waiting for its first concurrent caller.
+
+**Every default lives in `setDefaults`, never in the struct literal.** A
+literal seed is applied *before* the options, so it cannot tell "the caller
+said nothing" from "the caller passed a zero" — `WithLogger(nil)` overwrites
+it and panics at the first log call, and the same holds for any interface or
+string field. `setDefaults` runs after, so a zero field is unambiguously
+unset. It is also the one place to look for what a service falls back to.
+The exception is a field whose zero value is *meaningful*: messagebus seeds
+its ping interval in the literal because `WithPing(0, ...)` deliberately
+disables pings, and post-apply defaulting would undo that.
 
 ```go
 func (m *manager) Dependencies() []common.Service {
@@ -156,15 +160,31 @@ backed by a supervised service.
 ```go
 type Option func(*manager)
 
-func (m *manager) apply(opts ...Option) {
+func (m *manager) applyOptions(opts ...Option) {
 	for _, opt := range opts {
 		opt(m)
 	}
 }
 
+// setDefaults fills every field the options left zero. It runs after
+// applyOptions, so a zero field means the caller said nothing.
+func (m *manager) setDefaults() {
+	if m.log == nil {
+		m.log = log.Default
+	}
+	if m.name == "" {
+		m.name = nameutil.Name(m)
+	}
+	if m.ctx == nil {
+		m.ctx = context.Background()
+	}
+}
+
+// WithLogger stores the logger raw - newManager stamps it with By once the
+// name resolves, so stamping here would bake in an empty caller field.
 func WithLogger(logger log.Logger) Option {
 	return func(m *manager) {
-		m.log = logger.By(m)
+		m.log = logger
 	}
 }
 
@@ -177,17 +197,19 @@ func WithDynamicConfig(greeting string) Option {
 
 ## `lifecycle.go`
 
-`Init` re-reads dynamic config from the context viper — and routes it
-through `apply`, so options remain the one mutation path. `Start` launches
+`Init` re-reads dynamic config from the context viper — through the same
+`applyOptions` + `setDefaults` pair the constructor uses, so a value has one
+way in and one place that says what a zero falls back to. `Start` launches
 the run loop:
 
 ```go
 func (m *manager) Init(ctx context.Context) error {
 	// dynamic config change
 	config := confutil.FromContext(ctx)
-	m.apply(
+	m.applyOptions(
 		WithDynamicConfig(config.GetString("example.greeting")),
 	)
+	m.setDefaults()
 	return nil
 }
 
