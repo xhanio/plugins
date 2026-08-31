@@ -46,6 +46,7 @@ func WithName(name string) Option
 func WithDataSource(source Source) Option
 func WithMigration(sqlDir string, version uint) Option
 func WithConnection(maxOpen, maxIdle int, maxLifetime, maxIdleTime, execTimeout time.Duration) Option
+func WithPlugins(plugins ...gorm.Plugin) Option   // installed on every connect; repeated calls append
 func WithLogger(logger log.Logger) Option
 
 type Source struct {
@@ -103,6 +104,117 @@ err := s.dbMgr.Transaction(ctx, func(txCtx context.Context) error {
 tx := dbMgr.ORM().Begin()
 txCtx := db.WrapContext(ctx, tx)
 ```
+
+## Tracing
+
+Per-statement spans come from a GORM plugin, wired through `WithPlugins`:
+
+```go
+import (
+    "github.com/xhanio/framingo/pkg/services/db/plugins/otelgorm"
+    // framingo's own pkg/services/tracing already owns this name in most apps
+    "gorm.io/plugin/opentelemetry/tracing"
+)
+
+p, err := otelgorm.New(tracingSvc, tracing.WithoutQueryVariables())
+if err != nil {
+    return errors.Wrap(err)
+}
+dbMgr := db.New(
+    db.WithType(db.Postgres),
+    db.WithPlugins(p),
+)
+```
+
+It wraps `gorm.io/plugin/opentelemetry/tracing` and lives in its own
+subpackage for the same reason the engine drivers do: that package imports the
+ClickHouse, MySQL and PostgreSQL dialectors unconditionally (it type-switches
+on them for `server.address`), so importing it from `pkg/services/db` would
+link all three client libraries into every binary. Only a binary that wires the
+plugin pays for it.
+
+What framingo fixes on top of upstream:
+
+- **The provider stays live.** The upstream plugin resolves
+  `provider.Tracer(...)` once, at construction. `otelgorm` hands it a
+  delegating provider (`traceutil.LiveProvider`) that re-resolves
+  `model.Tracer.Provider()` on every span,
+  so a tracing-service restart takes effect without rebuilding the database
+  connection — the same "never cache the provider" rule the trace middleware
+  follows.
+- **Metrics reporting is off.** The plugin's DBStats half reaches for
+  `otel.GetMeterProvider()`, the global framingo never touches.
+`WithoutMetrics` is the only default `New` forces, because it is the only one
+upstream gives no way to reverse. Everything else is the caller's, applied
+after framingo's — `WithAttributes`, `WithDBSystem`, `WithoutQueryVariables`,
+`WithQueryFormatter`, `WithRecordStackTrace`, `WithoutServerAddress` all pass
+straight through.
+
+> **Pass `WithoutQueryVariables()` unless the data is fixtures.** Upstream
+> interpolates bound values into `db.query.text` by default, and framingo no
+> longer overrides that. The values are where the credentials and the PII are,
+> and the span travels to a backend with weaker access controls than the
+> database. The placeholder form still names the statement and its table.
+
+`New` returns an error rather than panicking, so a nil tracer — the plugin
+wired before the tracing service is assigned — surfaces at wiring time instead
+of as a nil dereference on the first query:
+
+```go
+p, err := otelgorm.New(tracingSvc,
+    tracing.WithoutQueryVariables(),
+    tracing.WithAttributes(attribute.String("deployment.environment", env)))
+if err != nil {
+    return errors.Wrap(err)
+}
+db.WithPlugins(p)
+```
+
+Overriding `WithTracerProvider` is the one override that costs something: it
+replaces the live handle with a pinned provider, reintroducing the restart bug.
+
+No new config key and no separate switch: with `tracing.enabled: false` the
+handle serves a noop provider and the spans cost nothing. The db service does
+**not** declare tracing in `Dependencies()` — the supervisor rolls a
+dependency's probes into every dependent's healthcheck, and a dead collector
+must never make the database unready.
+
+### A span nests only if a context reached the statement
+
+The plugin starts its span from `tx.Statement.Context`, so the question is
+never which accessor you used — it is whether a context got as far as the
+statement. Three forms carry one:
+
+| Form | Span | Transaction from ctx |
+|---|---|---|
+| `FromContext(ctx)` | nests | picked up |
+| `FromContextTimeout(ctx, d)` | nests | picked up |
+| `ORM().WithContext(ctx)` | nests | **bypassed** |
+| `ORM()` | detached root | bypassed |
+
+`FromContext` is not doing anything exotic — its non-transaction branch *is*
+`ORM().WithContext(ctx)`:
+
+```go
+func (m *manager) FromContext(ctx context.Context) *gorm.DB {
+	tx, ok := ctx.Value(common.ContextKeyTX).(*gorm.DB)
+	if !ok {
+		return m.ormDB.WithContext(ctx)
+	}
+	return tx
+}
+```
+
+So `ORM().WithContext(ctx)` traces identically. What it drops is the other
+half: an active transaction placed in the context by `Transaction(...)`. Use it
+and the query runs on the base connection, outside that transaction — a
+correctness problem well before it is a tracing one, and a deadlock on a
+one-connection pool. That is why `FromContext(ctx)` stays the default.
+
+Bare `ORM()` is the only form that loses the span. Queries issued that way are
+still traced, but as **root spans**: real timings, no link to the request that
+caused them, and a backend full of orphan single-span traces. Reach for it only
+where there is genuinely no context — schema setup, tests.
 
 ## Dynamic Config Keys
 

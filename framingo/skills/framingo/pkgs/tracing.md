@@ -206,6 +206,76 @@ basic tier, api after `TopoSort`). If you want the middleware's dependency
 health visible, register the middleware itself with the supervisor — it is a
 `common.Service` — and its degradation reports under its own name.
 
+## Database Spans — `pkg/services/db/plugins/otelgorm`
+
+The db service emits one client span per statement through a GORM plugin,
+wired with the same explicit handle:
+
+```go
+import "github.com/xhanio/framingo/pkg/services/db/plugins/otelgorm"
+
+m.db = db.New(
+    db.WithType(config.GetString("db.type")),
+    db.WithPlugins(p),   // p, err := otelgorm.New(m.tracing, ...)
+)
+```
+
+It wraps `gorm.io/plugin/opentelemetry/tracing`, kept in its own subpackage
+because that package imports the ClickHouse/MySQL/PostgreSQL dialectors
+unconditionally — importing it from `pkg/services/db` would link all three
+into every binary and undo the driver registry. Framingo hands it
+`traceutil.LiveProvider(t)` so `Provider()` is re-resolved per span (a tracing
+restart takes effect without rebuilding the connection) and forces
+`WithoutMetrics()` (that path reaches for the global `MeterProvider`, and
+upstream offers no way to redirect it). That is the only forced default —
+upstream `tracing.Option` values are applied after it, so every other knob
+passes through. Pass `tracing.WithoutQueryVariables()` yourself: upstream puts
+bound values into `db.query.text` by default, and that is where the credentials
+and the PII are.
+
+### Wiring other instrumentation — `pkg/utils/traceutil`
+
+Any library that takes a `trace.TracerProvider` reads `Tracer(...)` once and
+holds it, so passing `t.Provider()` directly pins its spans to the provider
+live at wiring time — a restart retires that one and it drops spans silently.
+`traceutil.LiveProvider(t)` re-resolves per span:
+
+```go
+otelgrpc.NewServerHandler(otelgrpc.WithTracerProvider(traceutil.LiveProvider(m.tracing)))
+```
+
+It depends only on `model.Tracer` and the otel trace API, so a component with
+its own `model.Tracer` implementation does not pull in the tracing service.
+
+For tests, `pkg/utils/testutil` supplies `NewTracer(provider)` (a
+`model.Tracer` whose provider `Swap` replaces mid-flight, standing in for a
+service restart) and `NewRecorder()` (in-memory exporter + synchronous
+provider, so a span is readable the moment it ends).
+
+Reach for it only when the real service cannot do the job — usually it can:
+
+- **Not reading spans back?** `tracing.New()` alone is already a usable
+  `model.Tracer` — no `Init`, no config, no exporter. It serves a noop
+  provider, so the component under test traces into nothing and costs nothing.
+- **Asserting on spans?** `tracing.Register` is exported, so a test can
+  register an in-memory exporter and run the real service. `Init` builds the
+  provider with `WithBatcher`, so call `Stop(true)` — which flushes
+  synchronously — before reading the exporter.
+- **Testing a provider swap?** That is the case that wants a double, since the
+  service only swaps its provider through `Init`.
+
+**Only context-carrying queries nest.** The plugin starts its span from
+`tx.Statement.Context`, so what matters is whether a context reached the
+statement, not which accessor produced it. `FromContext(ctx)`,
+`FromContextTimeout(ctx, d)` and `ORM().WithContext(ctx)` all parent correctly;
+bare `db.Manager.ORM()` carries `context.Background()` and exports detached
+root spans. Prefer `FromContext(ctx)` anyway — it also picks up an active
+transaction from the context, which `ORM().WithContext` bypasses. See
+[db.md](db.md).
+
+Like the middleware, db does **not** declare tracing in `Dependencies()`: a
+dead collector must never make the database unready.
+
 ## Spans in App Code
 
 Handlers already sit inside the server span: the project `api.Context` is a
@@ -238,3 +308,6 @@ drops spans.
   per-message ones.
 - Registering tracing anywhere but first in the basic tier still works, but
   spans emitted during shutdown may be dropped instead of flushed.
+- A db query issued through `ORM()` traces as its own root span, never under
+  the request that caused it — `ORM()` has no context to parent from. Use
+  `FromContext(ctx)`.

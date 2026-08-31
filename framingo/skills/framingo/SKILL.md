@@ -1,11 +1,11 @@
 ---
 name: framingo
 description: Use when working with Framingo (`github.com/xhanio/framingo`) Go code — bootstrapping a new framingo backend project, creating services, registering with the supervisor, configuring HTTP servers/routers, the database service, pub/sub messaging, or implementing service lifecycle interfaces. Triggers on mentions of framingo, "new Go backend", service lifecycle, supervisor, handler groups, or any framingo package imports.
-compatibility: Requires Go 1.25+. Documents github.com/xhanio/framingo v0.6.11 — where the repo's go.mod pins a different framingo version, trust the code over this prose.
+compatibility: Requires Go 1.25+. Documents github.com/xhanio/framingo v0.6.12 — where the repo's go.mod pins a different framingo version, trust the code over this prose.
 metadata:
   author: xhanio
-  version: "1.3.9" # mirrors plugin.json; bump both together
-  framingo: v0.6.11 # the framework version these docs describe
+  version: "1.3.10" # mirrors plugin.json; bump both together
+  framingo: v0.6.12 # the framework version these docs describe
 ---
 
 # Framingo - Service-Oriented Go Framework
@@ -54,6 +54,7 @@ One file per concept, in two halves — `pkgs/` is how to **use framingo's packa
 |---|---|
 | [app/layout.md](app/layout.md) | The categorized `pkg/` layout, the three-layer access rule, import order |
 | [app/services.md](app/services.md) | Writing a service: interface-in-two-places, `New`/`newManager`, options, health probes |
+| [app/testing.md](app/testing.md) | Test package choice (`package foo` by default, `foo_test` only when a registry forces it), test file naming, `pkg/utils/testutil` |
 | [app/routers.md](app/routers.md) | Authoring routers: the `router.go`/`handler.go`/`router.yaml` triple, the two `api` packages, project `api.Context`, `DiscoverHandlers` |
 | [app/middlewares.md](app/middlewares.md) | Authoring `api.Middleware`: the `Func(enabled, config)` contract, switches, config-free vs configured, decline, attachment |
 | [app/types.md](app/types.md) | The project's `types/` categories, which layer owns each, the types-first design order, the two `api` packages |
@@ -120,7 +121,7 @@ Either route, the reference map above is the per-concept guide for the work insi
 | Concern | Package | Interface / Key Type | Docs |
 |---|---|---|---|
 | Service orchestration | `pkg/services/supervisor` | `supervisor.Manager` | [pkgs/supervisor.md](pkgs/supervisor.md) |
-| Database | `pkg/services/db` (+ `db/drivers/`) | `db.Manager`; blank-import a driver subpackage (sqlite/mysql/postgres/clickhouse); sqlite needs `CGO_ENABLED=1` | [pkgs/db.md](pkgs/db.md) |
+| Database | `pkg/services/db` (+ `db/drivers/`, `db/plugins/`) | `db.Manager`; blank-import a driver subpackage (sqlite/mysql/postgres/clickhouse); sqlite needs `CGO_ENABLED=1`; per-statement spans via `otelgorm.New(tracer, tracing.WithoutQueryVariables())` (returns an error) → `db.WithPlugins(p)`; pass that option or bound values land in `db.query.text` | [pkgs/db.md](pkgs/db.md) |
 | HTTP API server | `pkg/services/api/server` + `pkg/types/api` (alias `fapi`) | `server.Manager`, `fapi.Router`, `fapi.Middleware` | [pkgs/api.md](pkgs/api.md) |
 | Handler request context | **project's own** `<project>/pkg/types/api` (unaliased `api`) | `api.Context` — use as the handler ctx instead of `echo.Context`; not a framingo type, you own it | [app/routers.md](app/routers.md) |
 | Middlewares | project `pkg/middlewares/<name>/` | `fapi.Middleware` — `Func(enabled bool, config []byte)` | [app/middlewares.md](app/middlewares.md) |
@@ -129,7 +130,7 @@ Either route, the reference map above is the per-concept guide for the work insi
 | Pub/Sub primitive | `pkg/services/pubsub` (+ `pubsub/driver/`) | `pubsub.Manager`; Memory/Redis/Kafka drivers | [pkgs/pubsub.md](pkgs/pubsub.md) |
 | Message bus (on top of pubsub) | `pkg/services/messagebus` | `messagebus.Manager`, `model.MessageBus`, `model.Messenger` | [pkgs/pubsub.md](pkgs/pubsub.md) |
 | Task planner | `pkg/services/planner` | `planner.Manager`, `model.Planner` | [pkgs/planner.md](pkgs/planner.md) |
-| Tracing (OpenTelemetry) | `pkg/services/tracing` (+ `tracing/exporters/`) and the `trace` middleware in `pkg/middlewares/trace` | `tracing.Manager`, `model.Tracer`; blank-import an exporter subpackage (otlpgrpc/otlphttp/stdout); attach the middleware via `WithMiddlewares`, activate with `trace: true` per server | [pkgs/tracing.md](pkgs/tracing.md) |
+| Tracing (OpenTelemetry) | `pkg/services/tracing` (+ `tracing/exporters/`) and the `trace` middleware in `pkg/middlewares/trace` | `tracing.Manager`, `model.Tracer`; blank-import an exporter subpackage (otlpgrpc/otlphttp/stdout); attach the middleware via `WithMiddlewares`, activate with `trace: true` per server; db spans via `pkg/services/db/plugins/otelgorm` | [pkgs/tracing.md](pkgs/tracing.md) |
 | Message interfaces | `pkg/types/common` | `Message`, `MessageSender`, `MessageHandler`, `RawMessageHandler` | [pkgs/pubsub.md](pkgs/pubsub.md) |
 | Service interfaces | `pkg/types/model` | `Supervisor`, `Database`, `Pubsub`, `MessageBus`, `Planner`, `Tracer` | [pkgs/types.md](pkgs/types.md) |
 | Logging | `pkg/utils/log` | `log.Logger` | [pkgs/utils.md](pkgs/utils.md) |
@@ -196,8 +197,10 @@ For the full category rules, type-separation example, server component file stru
 - Ports are `uint`, not `int`: `server.WithEndpoint(host, port uint, prefix)` and `db.Source.Port uint`. Feed them `config.GetUint(...)` — `GetInt` is a compile error.
 - `db.WithConnection` takes **five** args (`maxOpen, maxIdle, maxLifetime, maxIdleTime, execTimeout`); the four-arg form doesn't compile.
 - Every `func:` in `router.yaml` needs a matching method, or registration fails at startup with `handler function <Name> not found in router.Handlers()`. Middleware names must be registered first, or `middleware <name> not found`.
+- Don't write a `package db` test that blank-imports a driver — `db/drivers/*` import `db` to self-register, so an internal test package hits `import cycle not allowed in test`. Registry packages (`db`, `tracing`) are the one place a `_test` package is required; everywhere else `package foo` is the default, since `newManager` exists to be used from inside.
 - Don't use the global Viper singleton — use the instance passed via `context.Context` (`confutil.FromContext(ctx)`).
 - Don't fail `Alive` on a dependency outage — restarting the service raises no database; that fails `Ready` only. And probes take the caller's ctx: derive (`context.WithTimeout(ctx, cap)`), never fabricate from `Background()`.
+- Don't expect a query made through bare `db.ORM()` to appear inside the request's trace — it carries `context.Background()`, so with tracing wired its spans export as detached roots. Anything that gets a context to the statement parents correctly: `FromContext(ctx)`, `FromContextTimeout(ctx, d)`, or `ORM().WithContext(ctx)`. Prefer `FromContext(ctx)` — `ORM().WithContext(ctx)` traces the same but bypasses a transaction carried in the context, running on the base connection instead.
 - After `echo.Shutdown` is called, the same echo instance can't be reused — the framework's api server rebuilds it on `Init`, but custom services must do the same if they wrap net/http servers.
 
 ## Key Patterns
@@ -208,7 +211,7 @@ For the full category rules, type-separation example, server component file stru
 4. **Dependency Declaration** - Services declare dependencies via `Dependencies()`, manager resolves order
 5. **Categorized Packages** - ALL code under `pkg/` must follow the category structure above
 6. **Type Separation** - Each domain concept has `api/` (wire), `entity/` (domain), `orm/` (DB), plus `model/` (service interfaces) and `repo/` (repository interfaces)
-7. **Concrete Constructors** - `New` returns the exported interface; unexported `newRouter`/`newManager` return the concrete type for package tests
+7. **Concrete Constructors** - `New` returns the exported interface; unexported `newRouter`/`newManager` return the concrete type for package tests, which is why test files default to `package foo`, not `package foo_test`
 8. **Error Handling** - ALWAYS use `github.com/xhanio/errors`, NEVER use `fmt.Errorf` or stdlib `errors`
 9. **Import Order** - Three groups: stdlib, third-party, project — always separated by blank lines
 10. **Layered Access** - the api level (routers, middlewares) calls services only; services persist through the repo level only; only `services/repository/` touches the database

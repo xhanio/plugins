@@ -79,6 +79,12 @@ router imports `pkg/services/...`, the split has been skipped.
 
 ## `manager.go` — Struct, Constructors, Dependencies
 
+`New` returns the interface; `newManager` returns the concrete type so package
+tests can construct it and reach the unexported state. That seam is why test
+files default to `package <service>` rather than `package <service>_test` —
+see [testing.md](testing.md).
+
+
 ```go
 type manager struct {
 	log  log.Logger
