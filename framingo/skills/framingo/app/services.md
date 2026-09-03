@@ -92,23 +92,27 @@ type manager struct {
 
 	repository repository.Repository
 	mb         common.RawMessageSender
+	meter      fmodel.Meter
 
 	greeting string // dynamic config
 
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     *sync.WaitGroup
+
+	metrics *metrics // cached instruments, built once at Init
 }
 
-func New(repo repository.Repository, mb common.RawMessageSender, opts ...Option) Manager {
-	return newManager(repo, mb, opts...)
+func New(infra Infra, repo repository.Repository, opts ...Option) Manager {
+	return newManager(infra, repo, opts...)
 }
 
 // newManager returns the concrete manager, the form package tests construct.
-func newManager(repo repository.Repository, mb common.RawMessageSender, opts ...Option) *manager {
+func newManager(infra Infra, repo repository.Repository, opts ...Option) *manager {
 	m := &manager{
 		repository: repo,
-		mb:         mb,
+		mb:         infra.MessageBus(),
+		meter:      infra.Meter(),
 		wg:         &sync.WaitGroup{},
 	}
 	m.applyOptions(opts...)
@@ -160,6 +164,47 @@ Note the dependency shapes: the service asks for the **narrowest interface
 that serves it** — `common.RawMessageSender`, not `messagebus.Manager` — and
 `Dependencies()` type-asserts, because a narrow interface may or may not be
 backed by a supervised service.
+
+**The narrow Infra view.** The app bundles its framework plumbing in
+`services/system/infra`, but a service never imports that package: it
+declares its own `Infra` interface in `model.go`, listing only the getters
+it consumes, and the app's bundle satisfies it structurally:
+
+```go
+// model.go
+// Infra is this service's narrow view of the app's infra bundle.
+type Infra interface {
+	Meter() fmodel.Meter
+	MessageBus() fmodel.MessageBus
+}
+```
+
+The bundle rides first in every constructor (`New(infra, repo, ...)`);
+business dependencies like the repository stay explicit arguments — the
+bundle carries plumbing, not peers. This keeps the signature honest about
+what the service actually uses, lets a test fake two methods instead of
+assembling managers, and leaves `Dependencies()` as precise as ever, since
+the constructor plucks the handles into ordinary fields. Getters return
+`model.*` handles (`fmodel.Meter`, `fmodel.MessageBus`), never concrete
+managers — and only ever *live* ones: the bundle is combined per app from
+services the wiring layer actually constructed, so a handle the app lacks
+is removed from the bundle and the narrow views, never carried as nil
+([components-server.md](components-server.md)).
+
+**Service metrics** (`metric.go`): instruments live in a `metrics` struct;
+the constructor stores the `model.Meter` handle and `Init` builds the
+instruments, guarded by `if m.metrics == nil` — the provider behind
+`model.Meter` keeps one identity for the life of the process, so cached
+instruments survive service restarts and never need a rebuild. The service
+name is the instrumentation scope. Creation goes in `Init`, not the
+constructor, because it can fail — and its failures (an invalid instrument
+name, a conflicting registration) are deterministic programmer errors, so
+failing `Init` surfaces them at first boot in dev/CI. That is different
+from *runtime* telemetry trouble (collector down, export errors), which
+stays inside the metrics service and never touches business services. Do
+not swallow the error into a noop instrument: the API's error-path return
+value has no documented contract, and silent degradation hides a typo
+until someone misses the metric in production.
 
 ## `option.go`
 
@@ -216,6 +261,13 @@ func (m *manager) Init(ctx context.Context) error {
 		WithDynamicConfig(config.GetString("example.greeting")),
 	)
 	m.setDefaults()
+	if m.metrics == nil {
+		metrics, err := m.newMetrics()
+		if err != nil {
+			return err
+		}
+		m.metrics = metrics
+	}
 	return nil
 }
 
@@ -296,14 +348,19 @@ split table, monitor semantics, and the escalation ladder:
 
 ## `business.go`
 
-The business method reads auth state from the context, delegates
-persistence to the repository, maps ORM → entity, and fires an event:
+The business method opens its own child span (handle-free — see
+[tracing.md](../pkgs/tracing.md) "Spans in App Code"; every return path
+must either `traceutil.Fail` or `span.End()`), reads auth state from the
+context, delegates persistence to the repository, maps ORM → entity, fires
+an event, and counts the call:
 
 ```go
 func (m *manager) HelloWorld(ctx context.Context, message string) (*entity.HelloWorld, error) {
+	ctx, span := traceutil.Start(ctx, m.name, "HelloWorld")
+
 	credential, ok := ctx.Value(api.ContextKeyCredential).(*entity.Credential)
 	if !ok {
-		return nil, errors.Unauthorized.Newf("credential not found in context")
+		return nil, traceutil.Fail(span, errors.Unauthorized.Newf("credential not found in context"))
 	}
 	greeting := m.greeting
 	if greeting == "" {
@@ -313,7 +370,7 @@ func (m *manager) HelloWorld(ctx context.Context, message string) (*entity.Hello
 
 	ormModel, err := m.repository.CreateHelloWorld(ctx, message)
 	if err != nil {
-		return nil, errors.Wrap(err)
+		return nil, traceutil.Fail(span, errors.Wrap(err))
 	}
 	result := &entity.HelloWorld{
 		ID:        ormModel.ID,
@@ -322,6 +379,8 @@ func (m *manager) HelloWorld(ctx context.Context, message string) (*entity.Hello
 		UpdatedAt: ormModel.UpdatedAt,
 	}
 	m.mb.SendRawMessage(ctx, m, "helloworld", result) // no return value — fire and forget
+	m.metrics.hello.Add(ctx, 1)
+	span.End()
 	return result, nil
 }
 ```

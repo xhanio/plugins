@@ -46,9 +46,11 @@ Lifecycle facts that matter:
   and spans cost nothing. Callers never nil-check.
 - **`Stop` is the flush.** The batch processor exports on its own clock;
   `Stop(wait)` shuts the provider down synchronously (5s bound) so buffered
-  spans reach the exporter. Register tracing **first** in the basic tier:
-  stop runs in reverse, so it flushes last — after the draining api server's
-  final requests.
+  spans reach the exporter. Register telemetry at the **end** of the infra
+  tier's `Register` call: the topo sort pops dependency-less services in
+  reverse registration order, so the services listed last init first and,
+  with stop reversed, flush last — after the draining api server's final
+  requests.
 - **`Alive` guards wiring only** (enabled but no provider built — a restart
   rebuilds it, and a deliberate stop does not fail it). There is deliberately
   **no `Ready`**: tracing is auxiliary, and the monitor rolls a dependency's
@@ -280,17 +282,40 @@ dead collector must never make the database unready.
 
 Handlers already sit inside the server span: the project `api.Context` is a
 valid `context.Context` carrying it, so `svc.Do(c, ...)` propagates for free.
-A service that wants its own child spans takes the `model.Tracer` handle as a
-constructor arg and:
+A business method adds its own child span **without holding any tracer** —
+`traceutil.Start` derives the tracer from the span already in the context,
+so the live provider rides each request and a context without a recording
+span (tracing disabled, unit tests) yields a noop:
 
 ```go
-ctx, span := s.tracer.Provider().Tracer("services/order").Start(ctx, "order.settle")
-defer span.End()
+func (m *manager) HelloWorld(ctx context.Context, message string) (*entity.HelloWorld, error) {
+	ctx, span := traceutil.Start(ctx, m.name, "HelloWorld")
+
+	thing, err := m.repository.Create(ctx, ...)
+	if err != nil {
+		return nil, traceutil.Fail(span, errors.Wrap(err))
+	}
+	// ...
+	span.End()
+	return result, nil
+}
 ```
 
-Resolve `Provider()` per use — never cache the `trace.TracerProvider` in a
-field: a tracing restart swaps providers, and a retired provider silently
-drops spans.
+The manual pair keeps the signature plain — no defer, no named returns, no
+closure. `traceutil.Fail` records the error, marks the span failed, ends
+it, and hands the error back, so an error return stays one line. The
+discipline it asks for: **every return path must either `Fail` or
+`span.End()`** — a path that does neither leaks an unended span that never
+exports.
+
+The scope is `m.name`, matching the service's metric scope. This is why
+tracing stays out of the app's infra bundle: no business service takes the
+handle — the trace middleware owns extraction and the server span, and
+business spans nest under it through the context. A service that genuinely
+needs the handle (custom propagation, span links across requests) still
+takes `model.Tracer` as a constructor arg and resolves `Provider()` per use
+— never cache the `trace.TracerProvider` in a field: a tracing restart swaps
+providers, and a retired provider silently drops spans.
 
 ## Gotchas
 
@@ -306,8 +331,8 @@ drops spans.
 - A WebSocket route on a traced server produces one span covering the whole
   connection, ended (and exported) only at close — session-length spans, not
   per-message ones.
-- Registering tracing anywhere but first in the basic tier still works, but
-  spans emitted during shutdown may be dropped instead of flushed.
+- Registering tracing anywhere but the tail of the infra tier still works,
+  but spans emitted during shutdown may be dropped instead of flushed.
 - A db query issued through `ORM()` traces as its own root span, never under
   the request that caused it — `ORM()` has no context to parent from. Use
   `FromContext(ctx)`.

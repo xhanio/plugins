@@ -47,8 +47,12 @@ type manager struct {
 	// infra services
 	tracing    tracing.Manager
 	db         db.Manager
+	metrics    metrics.Manager
 	pubsub     pubsub.Manager
 	messagebus messagebus.Manager
+	// infra bundle for business constructors
+	infra infra.Infra
+	// data access
 	repository repository.Repository
 
 	// system services
@@ -134,6 +138,9 @@ func (m *manager) initServices() error {
 
 	// all further tracing config arrives via the tracing.* keys in Init
 	m.tracing = tracing.New(tracing.WithLogger(m.log))
+	// likewise metrics.*; the meter's provider is stable for the life of the
+	// process, so services create their instruments once at Init
+	m.metrics = metrics.New(metrics.WithLogger(m.log))
 
 	m.db = db.New(
 		db.WithType(m.config.GetString("db.type")),
@@ -154,6 +161,10 @@ func (m *manager) initServices() error {
 
 	m.pubsub = pubsub.New(driver.NewMemory(m.log), pubsub.WithLogger(m.log))
 	m.messagebus = messagebus.New(m.pubsub, messagebus.WithLogger(m.log))
+
+	// combine the services business constructors consume
+	m.infra = infra.New(m.db, m.metrics, m.pubsub, m.messagebus)
+
 	m.repository = repository.New(m.db, repository.WithLogger(m.log))
 
 	/* init system level services */
@@ -171,7 +182,7 @@ func (m *manager) initServices() error {
 
 	/* init business level components */
 
-	m.example = example.New(m.repository, m.messagebus, example.WithLogger(m.log))
+	m.example = example.New(m.infra, m.repository, example.WithLogger(m.log))
 
 	/* init api level components */
 
@@ -215,14 +226,40 @@ func (m *manager) initServices() error {
 }
 ```
 
-Two details that matter:
+Three details that matter:
 
-- **Blank-import the db drivers in this file.** The real one pulls in all
-  four `pkg/services/db/drivers/*` packages with `_` imports; a binary that
-  skips one fails at Init with "driver not registered".
+- **Blank-import the db drivers and telemetry exporters in this file.** The
+  real one pulls in all four `pkg/services/db/drivers/*` packages plus the
+  `pkg/services/tracing/exporters/*` and `pkg/services/metrics/exporters/*`
+  packages with `_` imports; a binary that skips one fails at Init with
+  "not registered".
 - **The repository service sits in the infra tier.** System and business
   services take `repository.Repository`, never `db.Manager` — only the
   repository touches the database.
+- **The infra bundle (`services/system/infra`) is a combiner, not a
+  builder.** It holds the `model.*` handles business constructors consume —
+  `DB() model.Database`, `Meter() model.Meter`, `PubSub() model.Pubsub`,
+  `MessageBus() model.MessageBus` — so a new cross-cutting handle later
+  means one new getter, not a parameter added to every constructor. The
+  wiring layer still constructs every service, holds each as its own field,
+  and registers them individually. Tracing stays out of the bundle: no
+  business service touches the tracer — spans arrive through the trace
+  middleware and propagate via context. The repository stays out too: it is
+  a business dependency, passed explicitly. Each consuming service declares
+  its own narrow view of the bundle rather than importing it — see
+  [services.md](services.md).
+- **Combine the bundle to fit the app — never wire a nil into it.** The
+  bundle lives in the app tree precisely so its shape tracks what *this*
+  app constructs: an app without pubsub drops the `PubSub()` getter (and
+  the field from consumers' narrow views); it does not pass nil to
+  `infra.New`. A nil handle costs nothing at wiring time and detonates
+  later, inside whichever service first calls through it, as an interface
+  panic far from the cause — and nothing downstream can guard it: a
+  nil-receiver check on a getter never sees a nil *interface*, and
+  substituting a noop would silently swallow a wiring bug the way the
+  fail-fast Init doctrine forbids. Every argument to `infra.New` is a
+  service constructed a few lines above in `initServices`, so the
+  invariant stays checkable by eye.
 
 ## `lifecycle.go` — Registration Order in `Init()`
 
@@ -235,14 +272,13 @@ func (m *manager) Init(ctx context.Context) error {
 		return errors.Wrap(err)
 	}
 
-	// register basic services; tracing first — stop runs in reverse, so it
-	// flushes last, after the draining api server's final requests
-	m.services.Register(m.tracing, m.db)
 	// register system services
-	m.services.Register(m.pubsub, m.messagebus, m.repository,
+	m.services.Register(m.repository,
 		m.user, m.role, m.organization, m.certificate, m.auth)
 	// register business services
 	m.services.Register(m.example)
+	// register infra last, telemetry at the end (see below)
+	m.services.Register(m.db, m.pubsub, m.messagebus, m.metrics, m.tracing)
 
 	// perform a topo sort to ensure the dependencies
 	if err := m.services.TopoSort(); err != nil {
@@ -271,6 +307,19 @@ func (m *manager) Init(ctx context.Context) error {
 	return nil
 }
 ```
+
+**Telemetry registers last — the order is load-bearing.** `TopoSort` pops
+dependency-less services in *reverse* registration order, so the
+last-registered ones sort **first**. Registering telemetry (metrics, then
+tracing) at the very end therefore puts it at the head of the sorted list:
+it initializes before everything that emits telemetry, and — with stop
+running in reverse — flushes last, after the draining api server's final
+requests and every other service's `Stop`. Register telemetry first and you
+get the opposite: it flushes *before* business services stop, silently
+dropping anything emitted on a Stop path. Metrics before tracing keeps
+tracing the very last to flush. Services with declared dependencies
+(repository, business services) are ordered by the graph itself, so only
+the dependency-less tail needs this care.
 
 `Start` enables pprof when `pprof.port` is set, starts the graph, then holds
 the shutdown context and blocks in the signal loop:
