@@ -42,7 +42,7 @@ Exact option signatures — **note `Source.Port` and `WithMigration`'s version a
 
 ```go
 func WithType(dbtype string) Option
-func WithName(name string) Option
+func WithName(name string) Option                 // also the config root: "clickhouse" reads clickhouse.connection.*
 func WithDataSource(source Source) Option
 func WithMigration(sqlDir string, version uint) Option
 func WithConnection(maxOpen, maxIdle int, maxLifetime, maxIdleTime, execTimeout time.Duration) Option
@@ -218,7 +218,7 @@ where there is genuinely no context — schema setup, tests.
 
 ## Dynamic Config Keys
 
-During `Init(ctx)`, the DB manager re-reads these from the context Viper, **overriding whatever `WithConnection` set at construction** — so a restart picks up pool changes without a rebuild:
+During `Init(ctx)`, the DB manager re-reads these from the context `confutil.Config`, **overriding whatever `WithConnection` set at construction** — so a restart picks up pool changes without a rebuild. They are read under the instance's config root — `db` by default, or the `WithName` name, so a second instance (`db.WithName("clickhouse")`) reads `clickhouse.connection.*`:
 - `db.connection.max_open` - max open connections
 - `db.connection.max_idle` - max idle connections
 - `db.connection.max_lifetime` - connection max lifetime

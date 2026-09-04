@@ -1,11 +1,11 @@
 ---
 name: framingo
 description: Use when working with Framingo (`github.com/xhanio/framingo`) Go code — bootstrapping a new framingo backend project, creating services, registering with the supervisor, configuring HTTP servers/routers, the database service, pub/sub messaging, or implementing service lifecycle interfaces. Triggers on mentions of framingo, "new Go backend", service lifecycle, supervisor, handler groups, or any framingo package imports.
-compatibility: Requires Go 1.25+. Documents github.com/xhanio/framingo v0.6.13 — where the repo's go.mod pins a different framingo version, trust the code over this prose.
+compatibility: Requires Go 1.25+. Documents github.com/xhanio/framingo v0.6.14 — where the repo's go.mod pins a different framingo version, trust the code over this prose.
 metadata:
   author: xhanio
-  version: "1.3.11" # mirrors plugin.json; bump both together
-  framingo: v0.6.13 # the framework version these docs describe
+  version: "1.3.12" # mirrors plugin.json; bump both together
+  framingo: v0.6.14 # the framework version these docs describe
 ---
 
 # Framingo - Service-Oriented Go Framework
@@ -137,7 +137,7 @@ Either route, the reference map above is the per-concept guide for the work insi
 | Service interfaces | `pkg/types/model` | `Supervisor`, `Database`, `Pubsub`, `MessageBus`, `Planner`, `Tracer`, `Meter` | [pkgs/types.md](pkgs/types.md) |
 | Logging | `pkg/utils/log` | `log.Logger` | [pkgs/utils.md](pkgs/utils.md) |
 | Errors | `github.com/xhanio/errors` | `errors.Newf`, `errors.Wrap`, category sentinels | [pkgs/errors.md](pkgs/errors.md) |
-| Config | `pkg/utils/confutil` | `confutil.FromContext(ctx)` | [pkgs/supervisor.md](pkgs/supervisor.md), [pkgs/config.md](pkgs/config.md) |
+| Config | `pkg/utils/confutil` | `confutil.Config` via `confutil.FromContext(ctx)`; getters take format-string keys (`GetInt("%s.max_open", nameutil.ConfigRoot(m.name))`) | [pkgs/supervisor.md](pkgs/supervisor.md), [pkgs/config.md](pkgs/config.md) |
 | Health probes | `pkg/types/common` | `Liveness`/`Readiness` — `Alive(ctx)`/`Ready(ctx)`; served at `/healthz` + `/readyz` by the example's health router | [pkgs/supervisor.md](pkgs/supervisor.md), [app/services.md](app/services.md) |
 
 ## Architecture
@@ -200,7 +200,7 @@ For the full category rules, type-separation example, server component file stru
 - `db.WithConnection` takes **five** args (`maxOpen, maxIdle, maxLifetime, maxIdleTime, execTimeout`); the four-arg form doesn't compile.
 - Every `func:` in `router.yaml` needs a matching method, or registration fails at startup with `handler function <Name> not found in router.Handlers()`. Middleware names must be registered first, or `middleware <name> not found`.
 - Don't write a `package db` test that blank-imports a driver — `db/drivers/*` import `db` to self-register, so an internal test package hits `import cycle not allowed in test`. Registry packages (`db`, `tracing`) are the one place a `_test` package is required; everywhere else `package foo` is the default, since `newManager` exists to be used from inside.
-- Don't use the global Viper singleton — use the instance passed via `context.Context` (`confutil.FromContext(ctx)`).
+- Don't use the global Viper singleton — use the `confutil.Config` passed via `context.Context` (`confutil.FromContext(ctx)`), and read under the service's root (`"%s.key", nameutil.ConfigRoot(m.name)`) rather than a hardcoded one, or a second instance of the service reads the first one's config.
 - Don't fail `Alive` on a dependency outage — restarting the service raises no database; that fails `Ready` only. And probes take the caller's ctx: derive (`context.WithTimeout(ctx, cap)`), never fabricate from `Background()`.
 - Don't expect a query made through bare `db.ORM()` to appear inside the request's trace — it carries `context.Background()`, so with tracing wired its spans export as detached roots. Anything that gets a context to the statement parents correctly: `FromContext(ctx)`, `FromContextTimeout(ctx, d)`, or `ORM().WithContext(ctx)`. Prefer `FromContext(ctx)` — `ORM().WithContext(ctx)` traces the same but bypasses a transaction carried in the context, running on the base connection instead.
 - After `echo.Shutdown` is called, the same echo instance can't be reused — the framework's api server rebuilds it on `Init`, but custom services must do the same if they wrap net/http servers.
@@ -209,7 +209,7 @@ For the full category rules, type-separation example, server component file stru
 
 1. **Functional Options** - All services use `With*()` option functions for configuration
 2. **Interface Composition** - Combine small interfaces (`Service` + `Initializable` + `Daemon`) as needed
-3. **Context Propagation** - Config and transactions flow through `context.Context`
+3. **Context Propagation** - Config (`confutil.Config`, format-string keys read under `nameutil.ConfigRoot(m.name)`) and transactions flow through `context.Context`
 4. **Dependency Declaration** - Services declare dependencies via `Dependencies()`, manager resolves order
 5. **Categorized Packages** - ALL code under `pkg/` must follow the category structure above
 6. **Type Separation** - Each domain concept has `api/` (wire), `entity/` (domain), `orm/` (DB), plus `model/` (service interfaces) and `repo/` (repository interfaces)

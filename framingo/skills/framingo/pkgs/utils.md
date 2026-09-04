@@ -54,9 +54,9 @@ Available in `pkg/structs/`:
 
 ## Notable `pkg/utils/` Helpers
 
-- `confutil` — Viper-from-context delivery ([supervisor.md](supervisor.md) Configuration Pattern)
+- `confutil` — `Config`, the read side of the app's viper (`New(viper)`), delivered through the `Init` context (`WrapContext`/`FromContext`, never nil). Getters take format-string keys — `GetInt("%s.connection.max_open", nameutil.ConfigRoot(m.name))` — so a service reads under its own root ([supervisor.md](supervisor.md) Configuration Pattern)
 - `paramutil` — ordered key/value params and the notations they're spelled in (`a=b&c=d`, `a=b c=d`, command lines); backs env/arg merging and DSN building
-- `nameutil` — service/router names: `Name(m)` is the package dir relative to the project root (judged from the gopro-injected `info.ProjectPath`; full import path without it) with the layout root (`nameutil.Root`, default `pkg`) stripped, joined with the type name — `services/db/manager`, `routers/user/router`. `Package(m)` is just the package dir's base name — the middleware default, where the package name is the middleware name (`middlewares/cors` → `cors`)
+- `nameutil` — service/router names: `Name(m)` is the package dir relative to the project root (judged from the gopro-injected `info.ProjectPath`; full import path without it) with the layout root (`nameutil.Root`, default `pkg`) stripped, joined with the type name — `services/db/manager`, `routers/user/router`. `Package(m)` is just the package dir's base name — the middleware default, where the package name is the middleware name (`middlewares/cors` → `cors`). `ConfigRoot(name)` is the config key root a service reads its dynamic keys under, derived from the name alone: the package segment of a category-visible name (`services/db/manager` → `db`), or the whole name when it has no path (`WithName("clickhouse")` → `clickhouse.connection.*`); services call it on `m.name` in `Init` and keep no second field
 - `reflectutil` — `Locate` (import path + type name), struct field scan/apply
 - `certutil` — cert bundle loading for TLS options
 - `sliceutil`, `maputil`, `strutil`, `ioutil`, `netutil`, `timeutil` — small stateless helpers

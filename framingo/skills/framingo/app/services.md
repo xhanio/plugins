@@ -103,16 +103,16 @@ type manager struct {
 	metrics *metrics // cached instruments, built once at Init
 }
 
-func New(infra Infra, repo repository.Repository, opts ...Option) Manager {
-	return newManager(infra, repo, opts...)
+func New(platform platform.Platform, repo repository.Repository, opts ...Option) Manager {
+	return newManager(platform, repo, opts...)
 }
 
 // newManager returns the concrete manager, the form package tests construct.
-func newManager(infra Infra, repo repository.Repository, opts ...Option) *manager {
+func newManager(platform platform.Platform, repo repository.Repository, opts ...Option) *manager {
 	m := &manager{
 		repository: repo,
-		mb:         infra.MessageBus(),
-		meter:      infra.Meter(),
+		mb:         platform.MessageBus(),
+		meter:      platform.Meter(),
 		wg:         &sync.WaitGroup{},
 	}
 	m.applyOptions(opts...)
@@ -133,6 +133,11 @@ stripped so the kind stays visible — this service is
 project prefix is judged from the gopro-injected `info.ProjectPath`;
 binaries built without it (plain `go build`, `go test`) fall back to the
 full import path.
+
+The same name decides the config root: `nameutil.ConfigRoot(m.name)` is
+its package segment (`example`, and still `example` from the unshortened
+import path), or the whole name once `WithName` gives one — see
+`lifecycle.go` below.
 
 The name is fixed at construction, in exactly this position: inside
 `setDefaults()`, which runs after `applyOptions(opts...)` and before
@@ -165,31 +170,19 @@ that serves it** — `common.RawMessageSender`, not `messagebus.Manager` — and
 `Dependencies()` type-asserts, because a narrow interface may or may not be
 backed by a supervised service.
 
-**The narrow Infra view.** The app bundles its framework plumbing in
-`services/system/infra`, but a service never imports that package: it
-declares its own `Infra` interface in `model.go`, listing only the getters
-it consumes, and the app's bundle satisfies it structurally:
-
-```go
-// model.go
-// Infra is this service's narrow view of the app's infra bundle.
-type Infra interface {
-	Meter() fmodel.Meter
-	MessageBus() fmodel.MessageBus
-}
-```
-
-The bundle rides first in every constructor (`New(infra, repo, ...)`);
-business dependencies like the repository stay explicit arguments — the
-bundle carries plumbing, not peers. This keeps the signature honest about
-what the service actually uses, lets a test fake two methods instead of
-assembling managers, and leaves `Dependencies()` as precise as ever, since
-the constructor plucks the handles into ordinary fields. Getters return
-`model.*` handles (`fmodel.Meter`, `fmodel.MessageBus`), never concrete
-managers — and only ever *live* ones: the bundle is combined per app from
-services the wiring layer actually constructed, so a handle the app lacks
-is removed from the bundle and the narrow views, never carried as nil
-([components-server.md](components-server.md)).
+**The platform bundle.** The app bundles its framework plumbing in
+`services/system/platform`; a service imports it and takes
+`platform.Platform` as is — no per-consumer slice of it. The bundle rides
+first in every constructor (`New(platform, repo, ...)`); business
+dependencies like the repository stay explicit arguments — the bundle
+carries plumbing, not peers. The constructor plucks the handles it uses
+into ordinary fields, so `Dependencies()` stays as precise as ever, and a
+test builds a bundle with `platform.New(nil, meter, nil, mb)`, leaving nil
+whatever the service never calls. Getters return `model.*` handles
+(`fmodel.Meter`, `fmodel.MessageBus`), never concrete managers — and only
+ever *live* ones: the bundle is combined per app from services the wiring
+layer actually constructed, so a handle the app lacks is removed from the
+bundle, never carried as nil ([components-server.md](components-server.md)).
 
 **Service metrics** (`metric.go`): instruments live in a `metrics` struct;
 the constructor stores the `model.Meter` handle and `Init` builds the
@@ -248,17 +241,23 @@ func WithDynamicConfig(greeting string) Option {
 
 ## `lifecycle.go`
 
-`Init` re-reads dynamic config from the context viper — through the same
+`Init` re-reads dynamic config from the context `confutil.Config` — through the same
 `applyOptions` + `setDefaults` pair the constructor uses, so a value has one
-way in and one place that says what a zero falls back to. `Start` launches
-the run loop:
+way in and one place that says what a zero falls back to. Keys are read
+under `nameutil.ConfigRoot(m.name)`: the package segment of the auto name
+(`services/example/manager` → `example` — a name with slashes cannot be a
+root, no env override could spell it), or the whole name when `WithName`
+gave one (a second database named `clickhouse` reads
+`clickhouse.connection.*`). The name is the one identity; there is no
+second field. `Start` launches the run loop:
 
 ```go
 func (m *manager) Init(ctx context.Context) error {
-	// dynamic config change
+	// dynamic config change, read under this service's root
 	config := confutil.FromContext(ctx)
+	root := nameutil.ConfigRoot(m.name)
 	m.applyOptions(
-		WithDynamicConfig(config.GetString("example.greeting")),
+		WithDynamicConfig(config.GetString("%s.greeting", root)),
 	)
 	m.setDefaults()
 	if m.metrics == nil {

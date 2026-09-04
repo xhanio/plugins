@@ -110,7 +110,8 @@ through the concrete manager's unexported field.
 
 ## Options
 
-`WithLogger`, `WithName`, plus the `metrics.*`-backed trio re-applied on
+`WithLogger`, `WithName` (which also moves the config root — a manager named
+`telemetry` reads `telemetry.*`), plus the `metrics.*`-backed trio re-applied on
 every `Init`: `WithEnabled` (its own switch — choosing an exporter never
 implies it), `WithExporter(name, config)` (registry name + the kv block
 its factory strict-decodes; nil config = exporter defaults), and
@@ -143,7 +144,7 @@ metrics:
 ## Instruments in App Code
 
 Business services never import this package: they consume `model.Meter`
-through their narrow `Infra` view, build their instruments once in `Init`
+through the app's `platform.Platform` bundle, build their instruments once in `Init`
 (where failure is a first-boot error — an invalid instrument name is a
 deterministic programmer mistake, not a runtime condition), cache them in
 a `metrics` struct, and record with the service name as the
@@ -164,7 +165,8 @@ test instead of reading zero).
 
 ## Gotchas
 
-- Metrics are off unless `metrics.enabled` says so — wiring an exporter
+- Metrics are off unless `metrics.enabled` (or `<name>.enabled` for a
+  `WithName`d instance) says so — wiring an exporter
   alone records into an SDK nothing exports. Enabled with no exporter
   named anywhere fails Init.
 - The otlp `endpoint` is `host:port` with **no scheme**; otlp exporters

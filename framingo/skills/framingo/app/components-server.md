@@ -50,8 +50,8 @@ type manager struct {
 	metrics    metrics.Manager
 	pubsub     pubsub.Manager
 	messagebus messagebus.Manager
-	// infra bundle for business constructors
-	infra infra.Infra
+	// platform bundle for business constructors
+	platform platform.Platform
 	// data access
 	repository repository.Repository
 
@@ -132,7 +132,7 @@ func (m *manager) initServices() error {
 	infra.Debug = (m.log.Level() == zapcore.DebugLevel)
 
 	// init service manager
-	m.services = supervisor.New(m.config, supervisor.WithLogger(m.log))
+	m.services = supervisor.New(confutil.New(m.config), supervisor.WithLogger(m.log))
 
 	/* init infra level services */
 
@@ -142,6 +142,8 @@ func (m *manager) initServices() error {
 	// process, so services create their instruments once at Init
 	m.metrics = metrics.New(metrics.WithLogger(m.log))
 
+	// a second database is this same block with db.WithName("clickhouse") and
+	// its keys read under clickhouse.* - the name is the config root
 	m.db = db.New(
 		db.WithType(m.config.GetString("db.type")),
 		db.WithDataSource(db.Source{
@@ -163,9 +165,9 @@ func (m *manager) initServices() error {
 	m.messagebus = messagebus.New(m.pubsub, messagebus.WithLogger(m.log))
 
 	// combine the services business constructors consume
-	m.infra = infra.New(m.db, m.metrics, m.pubsub, m.messagebus)
+	m.platform = platform.New(m.db, m.metrics, m.pubsub, m.messagebus)
 
-	m.repository = repository.New(m.db, repository.WithLogger(m.log))
+	m.repository = repository.New(m.platform, repository.WithLogger(m.log))
 
 	/* init system level services */
 
@@ -182,7 +184,7 @@ func (m *manager) initServices() error {
 
 	/* init business level components */
 
-	m.example = example.New(m.infra, m.repository, example.WithLogger(m.log))
+	m.example = example.New(m.platform, m.repository, example.WithLogger(m.log))
 
 	/* init api level components */
 
@@ -236,7 +238,7 @@ Three details that matter:
 - **The repository service sits in the infra tier.** System and business
   services take `repository.Repository`, never `db.Manager` — only the
   repository touches the database.
-- **The infra bundle (`services/system/infra`) is a combiner, not a
+- **The platform bundle (`services/system/platform`) is a combiner, not a
   builder.** It holds the `model.*` handles business constructors consume —
   `DB() model.Database`, `Meter() model.Meter`, `PubSub() model.Pubsub`,
   `MessageBus() model.MessageBus` — so a new cross-cutting handle later
@@ -245,19 +247,18 @@ Three details that matter:
   and registers them individually. Tracing stays out of the bundle: no
   business service touches the tracer — spans arrive through the trace
   middleware and propagate via context. The repository stays out too: it is
-  a business dependency, passed explicitly. Each consuming service declares
-  its own narrow view of the bundle rather than importing it — see
-  [services.md](services.md).
+  a business dependency, passed explicitly. Consumers import the bundle and
+  take `platform.Platform` as is — see [services.md](services.md).
 - **Combine the bundle to fit the app — never wire a nil into it.** The
   bundle lives in the app tree precisely so its shape tracks what *this*
-  app constructs: an app without pubsub drops the `PubSub()` getter (and
-  the field from consumers' narrow views); it does not pass nil to
-  `infra.New`. A nil handle costs nothing at wiring time and detonates
+  app constructs: an app without pubsub drops the `PubSub()` getter; it
+  does not pass nil to
+  `platform.New`. A nil handle costs nothing at wiring time and detonates
   later, inside whichever service first calls through it, as an interface
   panic far from the cause — and nothing downstream can guard it: a
   nil-receiver check on a getter never sees a nil *interface*, and
   substituting a noop would silently swallow a wiring bug the way the
-  fail-fast Init doctrine forbids. Every argument to `infra.New` is a
+  fail-fast Init doctrine forbids. Every argument to `platform.New` is a
   service constructed a few lines above in `initServices`, so the
   invariant stays checkable by eye.
 

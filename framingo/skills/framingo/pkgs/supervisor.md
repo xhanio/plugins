@@ -52,12 +52,12 @@ Orchestrates all services. Located in `pkg/services/supervisor`.
 
 ```go
 import (
-    "github.com/spf13/viper"
     "github.com/xhanio/framingo/pkg/services/supervisor"
+    "github.com/xhanio/framingo/pkg/utils/confutil"
 )
 
-// Create manager with viper config
-mgr := supervisor.New(config,
+// Create manager with the app's config — the wiring layer's viper, wrapped once
+mgr := supervisor.New(confutil.New(config),
     supervisor.WithLogger(logger),
     supervisor.WithMonitorPolicy(30*time.Second, 3, 0), // sweep cadence, restarts per service, restart delay
 )
@@ -114,7 +114,7 @@ slow-starting infrastructure (a database still bootstrapping when the
 process boots):
 
 ```go
-mgr := supervisor.New(config,
+mgr := supervisor.New(confutil.New(config),
     // maxRetries: 0 off (default), n retries, -1 until ctx cancels;
     // the wait starts at 1s and doubles up to 30s
     supervisor.WithInitPolicy(-1, time.Second, 30*time.Second),
@@ -181,22 +181,28 @@ service restart is the supervisor's job, pod restart is the platform's —
 
 ## Configuration Pattern
 
-Framingo uses instance-based Viper (NOT the global singleton). Config is propagated via `context.Context`:
+Framingo uses instance-based Viper (NOT the global singleton), seen by services only through `confutil.Config` — the read side, propagated via `context.Context`:
 
 ```go
-import "github.com/xhanio/framingo/pkg/utils/confutil"
+import (
+    "github.com/xhanio/framingo/pkg/utils/confutil"
+    "github.com/xhanio/framingo/pkg/utils/nameutil"
+)
 
-// In Init(ctx), read dynamic config:
-func (s *myService) Init(ctx context.Context) error {
+// In Init(ctx), read dynamic config under the service's root:
+func (m *manager) Init(ctx context.Context) error {
     config := confutil.FromContext(ctx)
-    s.setting = config.GetString("my.setting")
+    root := nameutil.ConfigRoot(m.name)
+    m.setting = config.GetString("%s.setting", root)
     return nil
 }
 ```
 
-**You never call `WrapContext` yourself in a service.** The supervisor wraps the viper instance it was constructed with (`supervisor.New(config, ...)`) into the context it passes to every service's `Init` — that's the whole delivery mechanism.
+Every getter takes a **format string**: with no args it is the key itself (`GetString("my.setting")`), otherwise it is Sprintf-ed first. That is how a service reads under its own root instead of a hardcoded one — `nameutil.ConfigRoot(m.name)` is the whole name when `WithName` gave one, or the package segment of the auto name (`services/db/manager` → `db`); see [app/services.md](../app/services.md).
 
-`FromContext` **never returns nil**: with no config in the context it returns an empty `viper.New()`, so every getter yields the zero value. No nil check is needed, but it also means a missing config looks like "all defaults" rather than an error — if a setting is mandatory, validate it in `Init`.
+**You never call `WrapContext` yourself in a service.** The supervisor wraps the `Config` it was constructed with (`supervisor.New(confutil.New(viper), ...)`) into the context it passes to every service's `Init` — that's the whole delivery mechanism. The wiring layer keeps the viper itself: it owns the file, the env prefix and the watch.
+
+`FromContext` **never returns nil**: with no config in the context it returns an empty `Config`, so every getter yields the zero value. No nil check is needed, but it also means a missing config looks like "all defaults" rather than an error — if a setting is mandatory, validate it in `Init`.
 
 Priority: CLI flags > env vars > YAML file > defaults.
 
