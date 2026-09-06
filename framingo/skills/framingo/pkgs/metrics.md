@@ -147,8 +147,12 @@ Business services never import this package: they consume `model.Meter`
 through the app's `platform.Platform` bundle, build their instruments once in `Init`
 (where failure is a first-boot error — an invalid instrument name is a
 deterministic programmer mistake, not a runtime condition), cache them in
-a `metrics` struct, and record with the service name as the
-instrumentation scope. The full pattern with code is in
+an `instruments` struct, and record with the service name as the
+instrumentation scope. The meter is optional: given none, a service mints
+noop instruments and records into them, so its business path never
+nil-checks — the same stance as the api server, whose metrics built-in
+records into noop instruments when a listener has no meter. The full pattern
+with code is in
 [../app/services.md](../app/services.md) "Service metrics".
 
 `metrics.New()` alone — no Init, no config, no exporter — is already a
@@ -159,9 +163,27 @@ recorded values, `pkg/utils/testutil` supplies `NewMeterRecorder()` (a
 `Collect`, assert; no flush, no sleep), `NewMeter(p)` (a bare
 `model.Meter` serving that provider; deliberately no `Swap` counterpart
 to testutil.Tracer's, since the production service never swaps
-providers), and `SumInt64(rm, name)` (a counter's total out of one
+providers), `SumInt64(rm, name)` (a counter's total out of one
 collected export — assert on its `found` so a mistyped name fails the
-test instead of reading zero).
+test instead of reading zero), and `Histogram[N](rm, name)` (a
+histogram's data points, `float64` for a duration, `int64` for a size,
+with the same `found`).
+
+## Framework-Emitted Metrics
+
+The api server records HTTP request metrics for every listener given
+`server.WithMeter(meter)` — request duration, active requests and body
+sizes, semconv-named, attributed with method, scheme, status, route
+template and the listener's name — through a lifecycle built-in that reads
+the same record the request log prints. The example hands it to every
+listener; series are keyed by listener and route, so probe polls stay in
+their own. The meter is not a dependency of the
+server, for the reason above: telemetry must never fail the listener.
+Details in [api.md](api.md) "Metrics".
+
+Still open as follow-ups: db pool gauges (`db.client.connection.*` from
+`sql.DBStats`, owned by the db manager) and runtime metrics through the
+contrib runtime package.
 
 ## Gotchas
 

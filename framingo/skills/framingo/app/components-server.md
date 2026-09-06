@@ -206,6 +206,10 @@ func (m *manager) initServices() error {
 			// each activates per server via the api.<name>.middlewares
 			// mapping - no entry (the health listener) leaves it dormant
 			server.WithMiddlewares(tracemw.New(m.tracing), corsmw.New()),
+			// every listener records HTTP metrics through the metrics service;
+			// metrics.enabled is the only switch - probe polls land in the
+			// health listener's own series
+			server.WithMeter(m.metrics),
 		}
 		// Per-server middleware configs: a plain mapping of middleware name
 		// to its default config, re-marshaled to raw YAML for the server.
@@ -260,7 +264,11 @@ Three details that matter:
   substituting a noop would silently swallow a wiring bug the way the
   fail-fast Init doctrine forbids. Every argument to `platform.New` is a
   service constructed a few lines above in `initServices`, so the
-  invariant stays checkable by eye.
+  invariant stays checkable by eye. The one deliberate exception is the
+  meter: metrics are auxiliary, so an app without a metrics service passes
+  nil and every consumer mints noop instruments — a configuration, not a
+  wiring bug. The functional handles (db, pubsub, messagebus) stay
+  never-nil.
 
 ## `lifecycle.go` — Registration Order in `Init()`
 
