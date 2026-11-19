@@ -12,13 +12,29 @@ Two layers: the low-level pub/sub primitive (`pkg/services/pubsub`) and a higher
 type Pubsub interface {
     common.Service
     // from identifies the publisher; subscribers registered under the same
-    // name do NOT receive their own message. Returns error.
+    // name do NOT receive their own message. ctx bounds only the
+    // cross-instance hop (Redis/Kafka), so a cancel can deliver partially.
     Publish(ctx context.Context, from, topic, kind string, payload any) error
     // Returns a CHANNEL, not a handler registration. Caller must Unsubscribe.
     Subscribe(name, topic string) (<-chan entity.PubsubMessage, error)
+    // Closes the channel - of EVERY subscriber under that name on that topic.
     Unsubscribe(name, topic string) error
 }
 ```
+
+Drivers:
+
+| Constructor | Reach |
+|---|---|
+| `driver.NewMemory(logger, opts...)` | in-process only |
+| `driver.NewRedis(redisClient, logger, opts...) (Driver, error)` | across instances, publishing to `pubsub:<topic>` and pattern-subscribing to `pubsub:<topic>*` |
+| `driver.NewKafka(brokers, groupID, logger, opts...) (Driver, error)` | across instances, one Kafka topic `pubsub`; each instance joins its own `groupID-<uuid>` group so every instance sees every message |
+
+A remote driver's `Publish` delivers to its own instance's subscribers directly, then publishes; each event carries the instance it came from, so the copy the broker hands back to that instance is skipped and a subscriber gets each message once.
+
+A message crossing instances travels as JSON: a subscriber on another
+instance gets its `Payload` as a `json.RawMessage`, never the publisher's
+Go value.
 
 ```go
 import (
@@ -48,7 +64,7 @@ Topics are hierarchical in the subscriber's favour: subscribing to `orders` rece
 
 ### Slow subscribers
 
-Each subscriber gets a growable pending queue (capped, `driver.WithQueueCap`) drained by its own
+Each subscriber gets a growable pending queue (capped, `driver.WithQueueCap`, default 50000) drained by its own
 goroutine, so a briefly slow consumer loses nothing and never stalls `Publish`. When the queue
 fills, the consumer has stopped draining entirely, and `driver.WithOnFull` decides what happens:
 
@@ -60,10 +76,12 @@ driver.NewMemory(logger)
 driver.NewMemory(logger, driver.WithOnFull(driver.DropSubscriber))
 ```
 
+`driver.WithChannelBuffer` sizes the subscriber's channel itself (default 256).
+
 Pick `DropSubscriber` when consumers can reconnect and replay (a persisted log plus a cursor).
 A lost connection is recoverable and visible; a lost message is neither. All three drivers accept
 these options, and expose `Dropped()` / `Evicted()` via the optional `driver.Stats` interface,
-which `pubsub.Manager.Info` reports.
+which `pubsub.Manager.Info` reports alongside its own published count.
 
 An in-process bus is never a delivery guarantee — it dies with the process. Durability belongs in
 whatever log the consumer replays from.
@@ -77,14 +95,38 @@ import "github.com/xhanio/framingo/pkg/services/messagebus"
 
 mb := messagebus.New(ps, messagebus.WithLogger(logger))
 
-// Register any service: modules implementing common.MessageHandler /
-// common.RawMessageHandler are auto-subscribed; others are no-op.
+// Register any named module (a service is one): modules implementing
+// common.MessageHandler / common.RawMessageHandler are auto-subscribed under
+// their name; others are a no-op.
 mb.Register(someService)
 
-// Direct channel access (e.g. WebSocket bridge)
-messenger, _ := mb.NewMessenger("ws:user-123")
-mb.AttachWebSocket(messenger, wsConn) // blocks until conn closes
+// Direct channel access (e.g. WebSocket bridge). The name must be unique per
+// connection: it is the subscription, and Unsubscribe drops every subscriber
+// sharing it.
+messenger, err := mb.NewMessenger("ws:" + session.UID() + ":" + uuid.NewString())
+if err != nil {
+    return errors.Wrap(err)
+}
+// pkg/utils/wsutil: blocks until conn closes, then closes the messenger
+// (the conn stays the caller's - in a WS handler, the server closes it)
+wsutil.Bridge(wsConn, messenger, wsutil.WithLogger(logger))
 ```
+
+`Register` works before or after `Start` — modules registered earlier are
+subscribed when the bus starts, later ones at once — and a second module
+under a taken name is ignored. `Stop` unsubscribes every module and waits
+for running handlers until its context ends. Options: `WithLogger`,
+`WithName`, and `WithTopic` (default `messagebus.DefaultTopic`), which lets
+several buses share one pubsub. `messagebus.Manager` is the
+`model.MessageBus` plus `Daemon` and `Debuggable`.
+
+`wsutil.Bridge` relays both ways as JSON: each `entity.PubsubMessage` on the
+messenger's channel is written to the socket, and each frame read that
+parses as one is sent on the bus as its `kind`/`payload` (unparseable frames
+are skipped). It pings the client every 30s and tears the session down on a
+pong missing for 10s — `wsutil.WithPing(interval, timeout)` tunes both, an
+interval of 0 turns pings off. The example's `messagebus` router serves this
+as a `method: WS` route ([api.md](api.md#websocket-handlers)).
 
 ## Message Interfaces
 
@@ -94,13 +136,17 @@ Defined in `pkg/types/common` (not in `pubsub`/`messagebus`):
 // Typed messages
 type Message interface { Kind() string }
 
-// Handlers — note each embeds Service, so a handler is always a service.
+// Handlers — each embeds Named, not Service: the handler is the module
+// Register takes, and its name is its subscription. It needs no Dependencies.
+// MessageHandler sees only messages whose payload is a common.Message (sent
+// by SendMessage on this instance); RawMessageHandler sees every message.
+// A module implementing both gets a typed message twice, once per method.
 type MessageHandler interface {
-    Service
+    Named
     HandleMessage(ctx context.Context, msg Message) error
 }
 type RawMessageHandler interface {
-    Service
+    Named
     HandleRawMessage(ctx context.Context, kind string, payload any) error
 }
 
@@ -129,7 +175,10 @@ m.mb.SendRawMessage(ctx, m, "helloworld", result)   // m implements Named
 type Messenger interface {
     common.Named
     Ch() <-chan entity.PubsubMessage        // closed by Close
-    Send(ctx context.Context, kind string, payload any) error
+    Send(ctx context.Context, kind string, payload any) error  // skips itself; the publish error
     Close()                                  // unsubscribes and closes Ch
 }
 ```
+
+An empty name is an error; the caller must `Close` the messenger
+(`wsutil.Bridge` does it on return).

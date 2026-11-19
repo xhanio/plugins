@@ -40,7 +40,12 @@ func (r *router) GetOrder(c api.Context) error {
 	return c.JSON(http.StatusOK, order)
 }
 
-// CreateOrder shows request binding + validation.
+// CreateOrder shows request binding + validation. A failed bind is a
+// BadRequest; Validate already reports a failed `validate` tag as
+// InvalidArgument (a 400), so its error is only wrapped. A check that needs
+// another service's answer — that the item exists in a catalog service — is
+// made here, through that service's model interface, before calling this one:
+// orchestrating two services is the handler's job, not the order service's.
 func (r *router) CreateOrder(c api.Context) error {
 	var req api.CreateOrderRequest // your DTO, defined in pkg/types/api
 	if err := c.BindAny(&req); err != nil {
@@ -64,8 +69,12 @@ func (r *router) Health(c api.Context) error {
 
 // Events backs `method: WS`. WebSocket handlers take the extra *websocket.Conn
 // (github.com/coder/websocket, not gorilla). The middleware stack still runs
-// before the upgrade; once upgraded, returning nil closes the connection
-// normally and returning an error closes it with StatusInternalError.
+// before the upgrade; once upgraded, the server closes the connection by what
+// the handler returned (wsutil.Close): nil, the peer closing, or EOF is a
+// normal close, any other error a StatusInternalError, logged. When the
+// server stops it closes the connection with StatusGoingAway, so the handler's
+// reads and writes fail and it returns. To relay a messagebus messenger, hand
+// the connection to wsutil.Bridge, as the example's messagebus router does.
 func (r *router) Events(c api.Context, conn *websocket.Conn) error {
 	return conn.Write(c, websocket.MessageText, []byte(`{"hello":"world"}`))
 }

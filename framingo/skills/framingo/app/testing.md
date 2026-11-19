@@ -26,7 +26,7 @@ One test file then sees both halves — the exported contract callers depend on,
 
 This runs against the common Go advice of "external test package by default." That advice is aimed at tests that reach in through a crack and end up coupled to accidental details. In framingo the concrete constructor is a designed, documented seam that every service publishes; using it is walking through the front door.
 
-The same pattern holds for routers (`newRouter`) and any other `newXxx` constructor — see [services.md](services.md).
+The same pattern holds for routers (`newRouter`) and any other `newXxx` constructor — see [services.md](services.md). An app service's pair takes the same arguments as its `New` — `newManager(platform, repo, opts...)` — so a test passes `platform.New(...)` with nil for every handle the code under test never calls.
 
 ## Exception: registry packages force an external test package
 
@@ -67,19 +67,49 @@ Reach for `foo_test` only when the compiler makes you. Nothing else in framingo 
 
 ## Naming the file
 
-Mirror the source file: `health.go` → `health_test.go`, `migrate.go` → `migrate_test.go`.
+Mirror the source file: `health.go` → `health_test.go`, `migrate.go` → `migrate_test.go`, `middleware.go` → `middleware_test.go` (every example middleware), `router.go` → `router_test.go` (every example router's `TestHandlersCoverConfig`). A test file whose name matches no source is renamed after the one it tests — db's `config_test.go` is `lifecycle_test.go`, api/server's `metrics_test.go` is `metric_test.go`.
 
 When a feature spans several source files and none owns it, name the file after the **feature** instead:
 
 - `transaction_test.go` — `Transaction` is implemented in `context.go`
 - `plugin_test.go` — the plugin feature lives in `option.go` (`WithPlugins`), `manager.go` (the field) and `business.go` (the install loop)
 
+The example's service tests sit in `manager_test.go`, beside the `newManager` they build on, whichever of the service's files the method under test lives in.
+
+## The example's service tests
+
+The pattern the role and user tests follow — [testify](https://github.com/stretchr/testify), real SQL, a setup that cleans up after itself:
+
+```go
+// pkg/services/system/user/manager_test.go
+func setup(t *testing.T, mb model.MessageBus) *manager {
+	t.Helper()
+	db, err := testutil.SetupDB()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Cleanup(true)) })
+	require.NoError(t, db.ORM().AutoMigrate(&orm.Organization{}, &orm.Role{}, /* ... */))
+	r := repository.New(platform.New(db, nil, nil, nil))
+	m := newManager(platform.New(db, nil, nil, mb), r)
+	require.NoError(t, m.Init(context.Background()))
+	return m
+}
+```
+
+- **The real repository over in-memory SQLite**, not a repository double, so a test exercises the query the service relies on.
+- **A fake embeds the interface it stands in for** and implements only what the test drives — `type fakeRepo struct{ repo.HelloWorld }` in the example service's test; an unimplemented method hits the embedded nil interface and panics, which is the point.
+- **Assert the error's category**, not just that one came back: `errors.Is(err, errors.NotFound)`. A check that passes on any error passes on the wrong one.
+
 ## Shared helpers — `pkg/utils/testutil`
 
 | Helper | Gives you |
 |---|---|
-| `SetupDB()` | an initialized `db.Manager` on in-memory SQLite, so a test exercises real SQL instead of a repository double (needs `CGO_ENABLED=1`) |
+| `SetupDB()` | an initialized `db.Manager` on in-memory SQLite, so a test exercises real SQL instead of a repository double (needs `CGO_ENABLED=1`). Each call gets a database of its own, shared by every connection in its pool. The manager also carries `model.DatabaseDebugger` — `Cleanup`/`Reload` — which a test cleans up through; the services under test get it as a plain `model.Database` and cannot |
 | `NewTracer(provider)` + `Swap(provider)` | a `model.Tracer` whose provider can be replaced mid-flight, standing in for a tracing-service restart |
 | `NewRecorder()` | in-memory exporter + synchronous provider, so a span is readable the moment it ends |
+| `NewMeter(provider)` | a `model.Meter` over the given provider — no `Swap`: the metrics service never replaces its provider |
+| `NewMeterRecorder()` | a `ManualReader` + provider, so a test collects what was recorded when it asks |
+| `SumInt64(rm, name)` / `Histogram[N](rm, name)` | read one metric out of collected `ResourceMetrics`; assert the `found` bool, so a missing or misnamed metric is not read as zero |
+
+The example service's `TestHelloWorldIncrementsCounter` is the meter trio at work: `newManager(platform.New(nil, testutil.NewMeter(provider), nil, fakeMB{}), fakeRepo{})`, two calls, `reader.Collect`, then `SumInt64(rm, "example.hello.total")`. A test that needs *some* `model.Meter` with no assertions takes `metrics.New()`, which needs no setup — or passes nil, and the service mints noop instruments.
 
 Reach for `NewTracer` only when the test actually swaps a provider — the real tracing service only does that through `Init`. A test that merely needs *some* `model.Tracer` is better served by `tracing.New()`, which serves a noop provider with no `Init`, config or exporter. See [../pkgs/tracing.md](../pkgs/tracing.md).

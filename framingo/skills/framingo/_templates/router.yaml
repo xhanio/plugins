@@ -9,10 +9,11 @@
 # BEFORE RegisterRouters, or startup fails with "middleware <name> not found".
 # Uncomment once you've written them.
 
-server: http # which server added via srvMgr.Add(name, ...) hosts this group
+server: http # required: which server added via srvMgr.Add(name, ...) hosts this group
 prefix: /orders # group prefix, appended to the server's own endpoint prefix
 # middlewares:        # optional, applied to every handler below
 #   - authnuser
+#   - authz           # at group level, after authnuser: authz needs the credential
 
 handlers:
   - method: GET
@@ -22,9 +23,14 @@ handlers:
   - method: POST
     path: /
     func: CreateOrder
-    # middlewares:    # handler middlewares run BEFORE the group's
-    #   - authz
-    permission: order.write # metadata only; your authz middleware enforces it
+    # middlewares:    # handler middlewares wrap outermost: they run BEFORE the group's
+    #   - deflate
+    # The permission your authz middleware checks the caller's role against; the
+    # server only carries it to the request. An authz that fails closed (the
+    # example's) refuses a handler under it that names none, so every handler in
+    # an authz group declares one — or opts out with `- authz: false` under its
+    # middlewares.
+    permission: order.write
 
   - method: GET
     path: /health
@@ -41,4 +47,17 @@ handlers:
   - method: WS
     path: /events
     func: Events
-# method also accepts ANY to match every HTTP verb.
+# method also accepts ANY to match every HTTP verb. The same method + path
+# declared twice, in any group of any router, fails registration.
+
+# A second prefix (or a different group middleware chain) is a second YAML
+# document in this same file, not a second router; every document's `func:`
+# names resolve against the one Handlers() map:
+#
+# ---
+# server: http
+# prefix: /order        # e.g. the caller's own, beside /orders by ID
+# handlers:
+#   - method: GET
+#     path: /
+#     func: GetCurrentOrder

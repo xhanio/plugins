@@ -18,26 +18,35 @@ Two different packages are in play throughout this document. Router code imports
 ```
 1. Server instances created    →  srvMgr.Add("http", ...)
 2. Middlewares registered      →  srvMgr.RegisterMiddlewares(authMW, ...)
+                                   (a name registered twice is a Conflict)
 3. Routers registered         →  srvMgr.RegisterRouters(myRouter)
    a. Router.Config() called  →  returns embedded YAML ([]byte)
-   b. YAML unmarshaled        →  produces the server-private group config
+   b. YAML parsed             →  one server-private handler group per `---` document
    c. Router.Handlers() called →  returns map[string]any
       - Recommended: `return api.DiscoverHandlers(r)` — reflects over the router's
         `func(api.Context) error` methods (project api.Context) and wraps each into
         the echo signature below. The wrapping happens HERE, at registration time,
         so handler bodies never mention echo.Context.
-   d. For each YAML handler:
-      - Func name looked up in Handlers() map
-      - Type asserted based on method (WS → func(echo.Context, *websocket.Conn) error, others → echo.HandlerFunc)
-      - a server-private handler key generated: {Server, Method, Path}
-      - Handler func stored in manager.handlerFuncs[key] or wsHandlerFuncs[key]
-   e. Server matched by the group's server field
-   f. Echo group created at endpoint.Path + group.Prefix
-   g. For each handler:
-      - Handler-specific + group-level middlewares collected
+   d. For each group, each YAML handler (resolveHandlers):
+      - Method upper-cased and checked (HTTP verbs, ANY, WS)
+      - Func name looked up in Handlers() map (missing → NotImplemented)
+      - a server-private handler key generated: {Server, Method, prefix+path}
+        (a key already taken, by any group or router → Conflict)
+      - Signature type-switched and checked against the method
+        (WS ↔ func(echo.Context, *websocket.Conn) error, others ↔ echo.HandlerFunc)
+      - Handler func stored in the manager's handlerFuncs[key]
+   e. Server matched by the group's server field (empty or unknown → error)
+   f. For each handler (installHandler):
+      - Echo group created at endpoint.Path + group.Prefix
+      - Handler-specific + group-level middlewares resolved, each Func called
       - Route registered: group.Add(method, path, handlerFunc, middlewares...)
+        (a WS route as GET, wrapped by the server's upgrade)
       - Handler metadata stored on server for runtime lookup
 ```
+
+The server keeps what it registered: a restart's `Init` rebuilds every echo
+instance and re-installs each handler, calling every middleware's `Func`
+again.
 
 ## Creating a Server Manager
 
@@ -46,7 +55,7 @@ import "github.com/xhanio/framingo/pkg/services/api/server"
 
 srvMgr := server.New(
     server.WithLogger(logger),
-    server.WithDebug(true),
+    server.WithDebug(true), // dev only: skips the WebSocket upgrade's origin check
 )
 
 // Step 1: Add named server instances (each gets its own echo.Echo); a name
@@ -54,6 +63,9 @@ srvMgr := server.New(
 srvMgr.Add("http", server.WithEndpoint("0.0.0.0", 8080, "/"),
     // HTTP request metrics through the metrics service - see Metrics below
     server.WithMeter(meter),
+    // HTTPS from a certutil.CertBundle; with CAs, a client certificate is
+    // asked for and verified against them, not required
+    // server.WithTLS(certBundle, agentCA),
 )
 srvMgr.Add("admin", server.WithEndpoint("0.0.0.0", 9090, "/admin"),
     // Server-level middlewares run on every request, matched or not, in this
@@ -70,11 +82,18 @@ srvMgr.Add("admin", server.WithEndpoint("0.0.0.0", 9090, "/admin"),
 )
 
 // Step 2: Register middlewares BEFORE routers (routers reference them by name)
-srvMgr.RegisterMiddlewares(authMiddleware, deflateMiddleware)
+if err := srvMgr.RegisterMiddlewares(authMiddleware, deflateMiddleware); err != nil {
+    return errors.Wrap(err)
+}
 
 // Step 3: Register routers (triggers the full wiring flow above)
-srvMgr.RegisterRouters(myRouter)
+if err := srvMgr.RegisterRouters(myRouter); err != nil {
+    return errors.Wrap(err)
+}
 ```
+
+`WithEndpoint` is required — `Add` fails without one (a host of `""` or a
+port of `0` leaves it unset).
 
 `Start` launches each listener in its own goroutine and returns immediately —
 it does **not** confirm binds. The manager implements `common.Liveness` and
@@ -84,7 +103,13 @@ probes, naming itself. Both verdicts are the same check on purpose — a
 restart fixes a dead listener (`Init` rebuilds the echo instances and
 re-binds), so it's liveness-fixable, and it's equally not ready for traffic.
 The supervisor's monitor picks this up like any other service's probes
-([supervisor.md](supervisor.md)).
+([supervisor.md](supervisor.md)). The manager declares no dependencies on
+purpose, so the listener (and its health routes) comes up even when a
+service behind a route failed.
+
+`Stop` gives in-flight requests and WebSocket handlers until the stop's
+context ends, then closes what is left and reports it (see WebSocket
+Handlers below).
 
 ## Implementing a Router
 
@@ -173,7 +198,7 @@ func (r *router) Handlers() map[string]any {
 
 ### `Handlers()`: every `router.go` calls `DiscoverHandlers` on itself
 
-**Each router package's own `router.go` implements `Handlers()` with this exact body — the four lines are identical in all six of `example/pkg/routers/` (auth, certificate, example, messagebus, role, user). Copy it verbatim; only the receiver differs.**
+**Each router package's own `router.go` implements `Handlers()` with this exact body — the four lines are identical in all seven of `example/pkg/routers/` (auth, certificate, example, health, messagebus, role, user). Copy it verbatim; only the receiver differs.**
 
 ```go
 func (r *router) Handlers() map[string]any {
@@ -226,7 +251,7 @@ Do NOT use arbitrary or mismatched prefixes (e.g., a `routers/user/` package wit
 ```yaml
 server: http              # MUST match a server name from srvMgr.Add("http", ...)
 prefix: /users            # MUST match the router package's domain (e.g., routers/user/ → /users)
-middlewares: [auth]        # group-level middlewares (applied to ALL handlers in group)
+middlewares: [authnuser]   # group-level middlewares (applied to ALL handlers in group)
 handlers:
   - method: GET
     path: /
@@ -234,18 +259,58 @@ handlers:
   - method: POST
     path: /
     func: CreateUser      # looked up in Router.Handlers()["CreateUser"]
-    middlewares: [validate]  # handler-specific middlewares (applied before group middlewares)
+    middlewares: [deflate]   # handler-specific middlewares (applied before group middlewares)
   - method: GET
     path: /:id
     func: GetUser
-    throttle:              # per-handler rate limiting
-      rps: 10
-      burst_size: 20
+    middlewares:
+      - throttle:          # a middleware entry with a config block: per-handler rate limiting
+          rps: 10
+          burst_size: 20
   - method: WS            # WebSocket handler — registered as GET, server upgrades automatically
     path: /feed
     func: Feed            # write as func(api.Context, *websocket.Conn) error;
                           # DiscoverHandlers wraps it to the echo signature
 ```
+
+### Several groups in one router
+
+Each YAML **document** in a router's config is one handler group — its own
+`server`, `prefix`, group `middlewares` and `handlers` — so a router whose
+routes need a second prefix (or a different group middleware chain) adds a
+document after `---` instead of a second router. Every group resolves its
+`func:` names against the one `Handlers()` map. A single-document file is
+the common case and reads as it always has; empty documents are skipped,
+and a config with no group at all fails registration. A user router serving
+accounts by ID and the caller's own account, say:
+
+```yaml
+server: http
+prefix: /users            # accounts by ID
+middlewares: [authnuser, authz]
+handlers:
+  - {method: GET, path: /:id, func: GetUser, permission: user.manage}
+  # ...
+---
+server: http
+prefix: /user             # the caller's own account: no :id
+middlewares: [authnuser, authz]
+handlers:
+  - {method: GET, path: /, func: GetCurrentUser, permission: user.self}
+  # ...
+```
+
+A route is one server, method and path wherever it is declared: the same
+route twice — in two groups of one router, or in two routers — fails
+registration with `Conflict` rather than silently replacing the first.
+
+Registration is where a router's config is checked, as `supervisor.Register`
+is where a service's name is. A document that does not parse, an invalid
+method, a `func:` with no handler of a matching signature (handler
+discovery skips a mismatched signature silently, so this is where it
+surfaces) or a route declared twice fails `RegisterRouters` with an error
+naming the router and the handler group — and the wiring returns it, so
+startup fails on it.
 
 ## Handler Key Format
 
@@ -330,15 +395,20 @@ func (r *router) Feed(c api.Context, conn *websocket.Conn) error {
 }
 ```
 
-**Lifecycle**: Middleware stack runs before upgrade (auth, logging, throttle all apply). Once upgraded, the server invokes the handler; on return, it closes the connection with the appropriate status (normal close on `nil`, `StatusGoingAway` if the request context was cancelled, `StatusInternalError` otherwise). Errors are logged via the server logger.
+**Lifecycle**: Middleware stack runs before upgrade (auth, logging, throttle all apply). A failed upgrade is a `BadRequest`; the origin check is skipped only under `server.WithDebug(true)`. Once upgraded, the server invokes the handler; on return, it closes the connection with `wsutil.Close` (`pkg/utils/wsutil`) by the handler's result: a normal close on `nil`, nothing more when the client closed the connection, released without a handshake when it dropped (EOF), `StatusGoingAway` once the server is stopping, `StatusInternalError` (the error as the reason) otherwise - the one case logged via the server logger. The connection is hijacked, so a handler's error never reaches the error middleware or the client as an `ErrorBody`; the close status is all the client sees.
+
+A handler that relays the message bus need not write the loop: `wsutil.Bridge(conn, messenger)` pumps JSON both ways until the connection ends, then closes the messenger — the example's `messagebus` router does exactly this ([pubsub.md](pubsub.md)).
+
+**On Stop** the server closes every open WebSocket connection with `StatusGoingAway` ("server shutting down") — net/http's `Shutdown` neither closes nor waits for an upgraded connection — and waits for the handlers to return until the stop's context ends. A handler need only return once its reads or writes fail; one that blocks on something else outlives the stop, which reports it. A connection upgraded after the stop began is closed the same way, its handler never invoked.
 
 ## Middleware Resolution
 
 Middlewares are registered by name via `RegisterMiddlewares()`. The YAML config references them by the name returned from `Middleware.Name()`. (Writing one is covered in [middlewares.md](../app/middlewares.md); this section is how the server resolves them.) During route registration:
 
-1. Handler-specific middlewares are resolved first (from `handler.middlewares`)
+1. Handler-specific middlewares are resolved first (from `handler.middlewares`) and wrap outermost
 2. Group-level middlewares are resolved next (from `group.middlewares`)
-3. If any referenced middleware name is not found, registration fails with `NotImplemented` error
+3. If any referenced middleware name is not found, registration fails with `NotImplemented` error — checked before the switch, so even `- name: false` for an unregistered name fails
+4. Each attachment's `Func` is called right there, so a config a middleware rejects fails startup
 
 Built-in server middlewares (applied to all routes automatically):
 `Request → Metrics → Recover → [server-level via WithMiddlewares, in order] → Logger → Info → Error → [Route middlewares] → Handler → Response`
@@ -398,7 +468,8 @@ the duration covers the whole chain.
 | `http.server.response.body.size` | histogram | By |
 
 Attributes on every record: `http.request.method` (the convention's set,
-`_OTHER` beyond it), `url.scheme`, `network.protocol.version` (`1.1`, `2`),
+`_OTHER` beyond it) and `url.scheme` — all `active_requests` carries — and on the
+duration and size records also `network.protocol.version` (`1.1`, `2`),
 `http.response.status_code`, and `api.server` (the instance's name, since one meter usually serves
 several listeners). `http.route` is the route template — one series per
 route, never the raw path — and is absent on an unmatched request.
@@ -431,6 +502,7 @@ The server's built-in error middleware runs every handler error through [`api.Wr
 
 ```go
 type ErrorBody struct {
+    Origin  error      `json:"-"`                 // the original error, for the server's log; never on the wire
     Source  string     `json:"source,omitempty"`  // server instance name (from srvMgr.Add("<name>", ...))
     Status  int        `json:"status,omitempty"`  // HTTP status
     Code    string     `json:"code,omitempty"`    // app-defined error code (optional)
@@ -442,20 +514,30 @@ type ErrorBody struct {
 
 Returning `errors.NotFound.Newf(...)` from a handler sets `Status: 404` and `Kind: "NotFound"`. The `Kind` field is the wire-level signal that lets Go clients recover the original `xhanio/errors` category without rebuilding it from `Status` — see the next section.
 
-A bare `errors.Category` returned from a handler (e.g. `return errors.NotImplemented.New()`) emits the status + `Kind` with no message. Non-`xhanio/errors` errors fall through to `500` with the raw `Error()` string as `Message`.
+`Message` is the outermost message only (`Error.Message()`), not the wrapped chain; `Code` and `Details` come from the error's `errors.WithCode(code, details)` option ([errors.md](errors.md)). A bare `errors.Category` returned from a handler (e.g. `return errors.Unauthorized`) emits the status + `Kind` with no message. The rest of `WrapError`'s mapping:
 
-`Source` is populated automatically by the server's built-in error middleware with the name passed to `srvMgr.Add("<name>", ...)` (e.g. `"http"`, `"admin"`). It is informational — useful when a caller talks to multiple framingo servers or when a gateway aggregates errors from several upstreams. Clients SHOULD NOT branch logic on `Source` value (the server name is a deployment detail, not part of the API contract). Its main practical use is the client-side check at [`pkg/services/api/client/client.go`](https://github.com/xhanio/framingo/blob/main/pkg/services/api/client/client.go) where an empty `Source` after a successful JSON parse signals "this response did not originate from a framingo server" — for example, a load balancer's 503 page or an HTML error from an upstream proxy.
+| Returned error | Status | `Kind` |
+|---|---|---|
+| `context.Canceled` / `context.DeadlineExceeded` (bare) | 499 / 408 | `Cancelled` / `DeadlineExceeded` |
+| `*echo.HTTPError` | its code — except 405, reported as 404 "api not found" | none |
+| `*api.ErrorBody` | passed through as is | as set |
+| a request matching no route | 404 | `NotFound` |
+| anything else | 500, raw `Error()` as `Message` | none |
+
+### Request validation
+
+The server installs a `go-playground/validator` instance as each echo's validator, so `c.Validate(&body)` checks the DTO's `validate:` tags. A failed tag comes back as `errors.InvalidArgument` — a 400 — so a handler returns it with a plain `errors.Wrap(err)`; validating something that is not a struct stays uncategorised, a 500, since that is the handler's bug. Binding failures are the handler's to categorise (the example's handlers return `errors.BadRequest.Wrap(err)` from `c.Bind`).
+
+`Source` is populated automatically by the server's built-in error middleware with the name passed to `srvMgr.Add("<name>", ...)` (e.g. `"http"`, `"admin"`). It is informational — useful when a caller talks to multiple framingo servers or when a gateway aggregates errors from several upstreams. Clients SHOULD NOT branch logic on `Source` value (the server name is a deployment detail, not part of the API contract). Its main practical use is the client-side check at [`pkg/services/api/client/client.go`](https://github.com/xhanio/framingo/blob/main/pkg/services/api/client/client.go): a 4xx/5xx body that does not parse as an `ErrorBody`, or parses with an empty `Source`, did not originate from a framingo server — a load balancer's 503 page, an HTML error from an upstream proxy — and the client reports it as an `ErrorBody` with `Source: api.ErrorSourceUnknown` (`"Unknown"`), the response's status, the raw body as `Message`, and no `Kind`.
 
 ## Consuming the Server with `pkg/services/api/client`
 
-The framingo HTTP client decodes any 4xx/5xx response into a `*api.ErrorBody` and returns it as the error from `Do`/`Send`. On the error path the response body is replaced with an `io.NopCloser`, so callers can `defer resp.Body.Close()` unconditionally — there is no separate cleanup branch.
+The framingo HTTP client ([client.md](client.md)) decodes any 4xx/5xx response into a `*api.ErrorBody` and returns it as the error from `Do`/`Send`, alongside the response. On that path the body has already been read and closed, and is replaced with an empty `io.NopCloser`, so closing it again is harmless. A transport failure (or a request that could not be built) returns a **nil** response, so check `err` before touching `resp`.
 
-**Recommended error-handling pattern** (requires `github.com/xhanio/errors` v1.0.3+ for `LookupCategory`):
+**Recommended error-handling pattern** (requires `github.com/xhanio/errors` v1.0.3+ for `LookupCategory`, v1.1.0+ for its `errors.As`):
 
 ```go
 import (
-    stderrors "errors"
-
     "github.com/labstack/echo/v4"
     "github.com/xhanio/errors"
     "github.com/xhanio/framingo/pkg/services/api/client"
@@ -469,10 +551,9 @@ func (c *myClient) doJSON(ctx context.Context, method, path string, in, out any)
         ContentType: echo.MIMEApplicationJSON,
         Body:        in,
     })
-    defer resp.Body.Close()
     if err != nil {
         var eb *api.ErrorBody
-        if stderrors.As(err, &eb) {
+        if errors.As(err, &eb) {
             // Recover the category from the wire's Kind so callers can use errors.Is.
             if cat := errors.LookupCategory(eb.Kind); cat != nil {
                 return cat.Wrap(eb)
@@ -481,6 +562,7 @@ func (c *myClient) doJSON(ctx context.Context, method, path string, in, out any)
         }
         return errors.Wrap(err) // transport / non-API error
     }
+    defer resp.Body.Close()
     if out != nil {
         return json.NewDecoder(resp.Body).Decode(out)
     }
@@ -498,16 +580,17 @@ if errors.Is(err, errors.Conflict) {
 
 // Structured access — full server payload.
 var eb *api.ErrorBody
-if stderrors.As(err, &eb) {
+if errors.As(err, &eb) {
     log.Printf("backend status=%d kind=%s code=%s details=%v",
         eb.Status, eb.Kind, eb.Code, eb.Details)
 }
 ```
 
-Note `errors.As` is `stdlib`-only; alias the stdlib package (e.g. `stderrors "errors"`) when you also import `github.com/xhanio/errors`, since the two packages cannot share the bare `errors` name.
+`github.com/xhanio/errors` has its own `As` (the stdlib's, re-exported), so there is no need to import the stdlib `errors` under an alias.
 
 **Anti-patterns**:
 
 - **Don't write `IsNotFound` / `IsConflict` wrappers** around `errors.As` + status compare. They add a per-client vocabulary without buying anything over the standard `errors.Is(err, errors.NotFound)` / `errors.As(err, &eb)` idioms.
 - **Don't rebuild the category from `Status`** with a hardcoded `switch` (`case 404: return errors.NotFound.Wrap(err)`). The server already wrote the category name in `Kind`; `LookupCategory(eb.Kind)` is authoritative. Status-based reconstruction is cargo-cult and loses precision when multiple categories share a status (e.g. `Conflict` vs `AlreadyExist` both 409).
 - **Don't reformat or drop `Message`** when wrapping. Servers often sanitize it for security; the durable signal is in `Status`/`Kind`/`Code`/`Details`. Preserve `*api.ErrorBody` (via `cat.Wrap(eb)` or by returning it directly) so callers can still read those fields via `errors.As`.
+- **Don't `defer resp.Body.Close()` before checking `err`.** A transport error comes with a nil response.

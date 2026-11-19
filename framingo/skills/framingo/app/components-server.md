@@ -12,21 +12,22 @@ components/server/example/
 ├── model.go     # Server interface (Named + Daemon + Initializable + Debuggable)
 ├── manager.go   # the manager struct and New() — fields and construction only
 ├── config.go    # newConfig (viper + env prefix) and initConfig (read + watch)
-├── service.go   # initServices() — creates every service instance, tier by tier
+├── service.go   # newLogger/newDatabase + initServices() — every service instance, tier by tier
 ├── lifecycle.go # Init/Start/Stop/Info — registration order, pprof, shutdown control
 ├── api.go       # initAPI() — registers middlewares and routers with the API server
-└── signal.go    # listenSignals() — SIGINT/SIGTERM/SIGHUP/SIGUSR1/SIGUSR2
+├── signal.go    # listenSignals() — SIGINT/SIGTERM/SIGHUP/SIGUSR1/SIGUSR2
+└── migrate.go   # Migrate() — the one-off schema run behind `exampleapp migrate`
 ```
 
-The daemon binary constructs this component and runs it — see
-[components-cmd.md](components-cmd.md).
+The daemon binary constructs this component and runs it, and its `migrate`
+subcommand calls `Migrate` — see [components-cmd.md](components-cmd.md).
 
 ## `model.go` — Server Interface
 
 ```go
 type Server interface {
 	common.Named
-	common.Daemon        // Start(ctx) / Stop(wait)
+	common.Daemon        // Start(ctx) / Stop(ctx)
 	common.Initializable // Init(ctx)
 	common.Debuggable    // Info(w, debug)
 }
@@ -97,6 +98,9 @@ func newConfig(configPath string) *viper.Viper {
 	conf.SetConfigFile(configPath)
 	infra.EnvPrefix = envutil.EnvPrefix(info.ProductName)
 	conf.SetEnvPrefix(infra.EnvPrefix)
+	// db.source.host is <PREFIX>_DB_SOURCE_HOST; without the replacer viper
+	// looks for <PREFIX>_DB.SOURCE.HOST, which nothing can set
+	conf.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	conf.AutomaticEnv()
 	return conf
 }
@@ -120,46 +124,84 @@ func (m *manager) initConfig() error {
 ## `service.go` — Service Creation, Tier by Tier
 
 `initServices` creates every instance in dependency order: logger,
-supervisor, infra, system, business, api. Condensed to the real shape:
+supervisor, infra, system, business, api. The logger and the database are
+built by two helpers, so [`Migrate`](#migratego--the-one-off-schema-run)
+constructs them exactly as the daemon does. Condensed to the real shape:
 
 ```go
-func (m *manager) initServices() error {
-	// init logger
-	m.log = log.New(
+func (m *manager) newLogger() log.Logger {
+	return log.New(
 		log.WithLevel(m.config.GetInt("log.level")),
-		log.WithFileWriter(m.config.GetString("log.file") /* , log.rotation.* keys */),
+		log.WithFileWriter(m.config.GetString("log.file") /* , the three log.rotation.* keys */),
 	)
-	infra.Debug = (m.log.Level() == zapcore.DebugLevel)
+}
 
-	// init service manager
-	m.services = supervisor.New(confutil.New(m.config), supervisor.WithLogger(m.log))
-
-	/* init infra level services */
-
-	// all further tracing config arrives via the tracing.* keys in Init
-	m.tracing = tracing.New(tracing.WithLogger(m.log))
-	// likewise metrics.*; the meter's provider is stable for the life of the
-	// process, so services create their instruments once at Init
-	m.metrics = metrics.New(metrics.WithLogger(m.log))
-
-	// a second database is this same block with db.WithName("clickhouse") and
-	// its keys read under clickhouse.* - the name is the config root
-	m.db = db.New(
+func (m *manager) newDatabase(opts ...db.Option) db.Manager {
+	base := []db.Option{
 		db.WithType(m.config.GetString("db.type")),
+		// each key is overridable as <PREFIX>_DB_SOURCE_HOST and so on (the
+		// key replacer in config.go), and viper ranks the environment above
+		// the file; the fallbacks apply only when neither sets a value
 		db.WithDataSource(db.Source{
-			// every field falls back: config key → env-style key → default
-			Host: sliceutil.First(
-				m.config.GetString("db.source.host"),
-				m.config.GetString("DB_HOST"),
-				"127.0.0.1",
-			),
-			Port: sliceutil.First(m.config.GetUint("db.source.port"), m.config.GetUint("DB_PORT"), 5432),
-			/* User, Password, DBName likewise */
+			Host:     sliceutil.First(m.config.GetString("db.source.host"), "127.0.0.1"),
+			Port:     sliceutil.First(m.config.GetUint("db.source.port"), 5432),
+			User:     m.config.GetString("db.source.user"),
+			Password: m.config.GetString("db.source.password"),
+			DBName:   m.config.GetString("db.source.dbname"),
 		}),
+		// empty dir: the daemon never touches the schema (the migrate Job does)
 		db.WithMigration(m.config.GetString("db.migration.dir"), m.config.GetUint("db.migration.version")),
 		db.WithConnection( /* the five db.connection.* keys */ ),
 		db.WithLogger(m.log),
+	}
+	return db.New(append(base, opts...)...)
+}
+
+func (m *manager) initServices() error {
+	m.log = m.newLogger()
+	infra.Debug = (m.log.Level() == zapcore.DebugLevel)
+
+	// services see the viper only as the read-side Config the supervisor carries into Init
+	m.services = supervisor.New(confutil.New(m.config),
+		supervisor.WithLogger(m.log),
+		// within the platform's stop timeout, so shutdown ends here, not in a SIGKILL
+		supervisor.WithStopPolicy(20*time.Second),
+		// probes feed /healthz and /readyz: without a sweep they would report
+		// only what Init and Start left behind
+		supervisor.WithMonitorPolicy(
+			m.config.GetDuration("supervisor.monitor.interval"),
+			m.config.GetInt("supervisor.monitor.max_retries"),
+			m.config.GetDuration("supervisor.monitor.restart_delay"),
+		),
 	)
+
+	/* init infra level services */
+
+	// Init re-reads these keys, so a restart picks up changes
+	m.tracing = tracing.New(
+		tracing.WithEnabled(m.config.GetBool("tracing.enabled")),
+		tracing.WithExporter(m.config.GetString("tracing.exporter"), m.config.GetStringMap("tracing.config")),
+		tracing.WithSampleRatio(m.config.GetFloat64("tracing.sample_ratio")),
+		tracing.WithLogger(m.log),
+	)
+	// likewise metrics.*; the meter's provider is stable for the life of the
+	// process, so services create their instruments once, at their first Init
+	m.metrics = metrics.New(
+		metrics.WithEnabled(m.config.GetBool("metrics.enabled")),
+		metrics.WithExporter(m.config.GetString("metrics.exporter"), m.config.GetStringMap("metrics.config")),
+		metrics.WithInterval(m.config.GetDuration("metrics.interval")),
+		metrics.WithLogger(m.log),
+	)
+
+	// query spans through the tracing service's own handle; bound values are
+	// left out of db.query.text - they carry credentials and PII
+	dbTracing, err := otelgorm.New(m.tracing, gormtracing.WithoutQueryVariables())
+	if err != nil {
+		return errors.Wrap(err)
+	}
+	// a second database is newDatabase with db.WithName("clickhouse") and
+	// its keys read under clickhouse.* - the name is the config root
+	m.db = m.newDatabase(db.WithPlugins(dbTracing))
 
 	m.pubsub = pubsub.New(driver.NewMemory(m.log), pubsub.WithLogger(m.log))
 	m.messagebus = messagebus.New(m.pubsub, messagebus.WithLogger(m.log))
@@ -167,15 +209,19 @@ func (m *manager) initServices() error {
 	// combine the services business constructors consume
 	m.platform = platform.New(m.db, m.metrics, m.pubsub, m.messagebus)
 
+	// one instance implements every repo contract; each service sees it
+	// through its own Repository interface, declared in its model.go
 	m.repository = repository.New(m.platform, repository.WithLogger(m.log))
 
 	/* init system level services */
 
-	m.user = user.New(m.repository, user.WithLogger(m.log))
-	m.role = role.New(m.repository, role.WithLogger(m.log))
-	m.organization = organization.New(m.repository, organization.WithLogger(m.log))
-	m.certificate = certificate.New(m.repository, certificate.WithLogger(m.log))
+	// user publishes the account changes auth ends sessions on
+	m.user = user.New(m.platform, m.repository, user.WithLogger(m.log))
+	m.role = role.New(m.platform, m.repository, role.WithLogger(m.log))
+	m.organization = organization.New(m.platform, m.repository, organization.WithLogger(m.log))
+	m.certificate = certificate.New(m.platform, m.repository, certificate.WithLogger(m.log))
 	m.auth = auth.New(
+		m.platform,
 		m.user,
 		nil, // LDAPAuthN is optional
 		nil, // APITokenAuthN is optional
@@ -197,22 +243,20 @@ func (m *manager) initServices() error {
 				m.config.GetUint(fmt.Sprintf("api.%s.port", name)),
 				m.config.GetString(fmt.Sprintf("api.%s.prefix", name)),
 			),
-			// cors must see every request - a preflight OPTIONS matches no
-			// route - so it rides the server-level slot. The
-			// api.<name>.middlewares mapping activates it under "cors" and
-			// carries its policy; with no entry it stays dormant, so the
-			// health listener serves without it.
-			// trace first, so its span covers the middlewares behind it;
-			// each activates per server via the api.<name>.middlewares
-			// mapping - no entry (the health listener) leaves it dormant
+			// server-level so they see every request (a preflight OPTIONS
+			// matches no route), trace first so cors runs inside the span;
+			// each stays dormant unless the api.<name>.middlewares mapping
+			// enables it by name - the health listener has no entry, so its
+			// probe polls go untraced
 			server.WithMiddlewares(tracemw.New(m.tracing), corsmw.New()),
 			// every listener records HTTP metrics through the metrics service;
-			// metrics.enabled is the only switch - probe polls land in the
-			// health listener's own series
+			// series are keyed by listener, so health probes never distort
+			// the public one's
 			server.WithMeter(m.metrics),
 		}
-		// Per-server middleware configs: a plain mapping of middleware name
-		// to its default config, re-marshaled to raw YAML for the server.
+		// per-server middleware defaults: a plain mapping of middleware name
+		// to its default config, re-marshaled to raw YAML for the server -
+		// unordered; order lives in router.yaml
 		if mws := m.config.GetStringMap(fmt.Sprintf("api.%s.middlewares", name)); len(mws) > 0 {
 			raw, err := yaml.Marshal(mws)
 			if err != nil {
@@ -222,7 +266,7 @@ func (m *manager) initServices() error {
 		}
 		// add TLS if configured
 		if m.config.IsSet(fmt.Sprintf("api.%s.cert", name)) {
-			opts = append(opts, server.WithTLS(certutil.MustCAFromFile( /* ca.cert, api.<name>.cert/key */ ), true))
+			opts = append(opts, server.WithTLS(certutil.MustCertFromFile( /* api.<name>.cert, "", api.<name>.key */ )))
 		}
 		if err := m.api.Add(name, opts...); err != nil {
 			return errors.Wrap(err)
@@ -232,15 +276,17 @@ func (m *manager) initServices() error {
 }
 ```
 
-Three details that matter:
+Four details that matter:
 
 - **Blank-import the db drivers and telemetry exporters in this file.** The
   real one pulls in all four `pkg/services/db/drivers/*` packages plus the
-  `pkg/services/tracing/exporters/*` and `pkg/services/metrics/exporters/*`
-  packages with `_` imports; a binary that skips one fails at Init with
+  three `pkg/services/tracing/exporters/*` and three
+  `pkg/services/metrics/exporters/*` packages (`otlpgrpc`, `otlphttp`,
+  `stdout`) with `_` imports; a binary that skips one fails at Init with
   "not registered".
 - **The repository service sits in the infra tier.** System and business
-  services take `repository.Repository`, never `db.Manager` — only the
+  services take their own `Repository` interface — the `repo.*` contracts
+  they use, declared in their `model.go` — never `db.Manager`: only the
   repository touches the database.
 - **The platform bundle (`services/system/platform`) is a combiner, not a
   builder.** It holds the `model.*` handles business constructors consume —
@@ -264,11 +310,11 @@ Three details that matter:
   substituting a noop would silently swallow a wiring bug the way the
   fail-fast Init doctrine forbids. Every argument to `platform.New` is a
   service constructed a few lines above in `initServices`, so the
-  invariant stays checkable by eye. The one deliberate exception is the
-  meter: metrics are auxiliary, so an app without a metrics service passes
-  nil and every consumer mints noop instruments — a configuration, not a
-  wiring bug. The functional handles (db, pubsub, messagebus) stay
-  never-nil.
+  invariant stays checkable by eye. There is no exception: the platform is
+  infrastructure, and every handle — db, meter, pubsub, messagebus — is
+  always there, so consumers call through them unchecked. An app that
+  wants no metrics still constructs the metrics service, disabled
+  (`metrics.enabled: false`): its meter then records into nothing.
 
 ## `lifecycle.go` — Registration Order in `Init()`
 
@@ -281,20 +327,30 @@ func (m *manager) Init(ctx context.Context) error {
 		return errors.Wrap(err)
 	}
 
-	// register system services
-	m.services.Register(m.repository,
-		m.user, m.role, m.organization, m.certificate, m.auth)
+	// register system services; a name another instance holds fails here
+	if err := m.services.Register(m.repository,
+		m.user, m.role, m.organization, m.certificate, m.auth); err != nil {
+		return errors.Wrap(err)
+	}
 	// register business services
-	m.services.Register(m.example)
+	if err := m.services.Register(m.example); err != nil {
+		return errors.Wrap(err)
+	}
 	// register infra last, telemetry at the end (see below)
-	m.services.Register(m.db, m.pubsub, m.messagebus, m.metrics, m.tracing)
+	if err := m.services.Register(m.db, m.pubsub, m.messagebus, m.metrics, m.tracing); err != nil {
+		return errors.Wrap(err)
+	}
 
 	// perform a topo sort to ensure the dependencies
 	if err := m.services.TopoSort(); err != nil {
 		return errors.Wrap(err)
 	}
-	// append api after topo sort to ensure the latest start
-	m.services.Register(m.api)
+	// append api after topo sort to ensure the latest start - an ordering,
+	// not a dependency: a failed dependency would keep the api's Init from
+	// running, and the health listener must come up regardless
+	if err := m.services.Register(m.api); err != nil {
+		return errors.Wrap(err)
+	}
 
 	// register all services with messagebus; modules without MessageHandler /
 	// RawMessageHandler are skipped automatically.
@@ -302,9 +358,10 @@ func (m *manager) Init(ctx context.Context) error {
 		m.messagebus.Register(svc)
 	}
 
-	// init all services — a failure is logged, not fatal: from here the
-	// supervisor's liveness monitoring and restart policy own unhealthy
-	// services.
+	// init all services — a failure is logged, not fatal, so the listeners
+	// still come up and /readyz reports what failed; from then on the
+	// monitor (supervisor.monitor.*) keeps the probes current and restarts
+	// a service whose liveness fails
 	if err := m.services.Init(ctx); err != nil {
 		m.log.Error(err)
 	}
@@ -352,8 +409,10 @@ func (m *manager) Start(ctx context.Context) error {
 }
 ```
 
-`Stop(wait)` stops the graph and cancels the context; `Info` delegates to
-`m.services.Info`.
+`Stop(ctx)` stops the graph, within `ctx` and the supervisor's stop policy, and cancels the
+context; `Info` delegates to `m.services.Info`. Give the supervisor a `WithStopPolicy` shorter
+than the platform's own stop timeout, so the shutdown ends there rather than in a SIGKILL —
+the example's 20s sits inside Kubernetes' default 30s termination grace period.
 
 ## `api.go` — Middleware and Router Registration
 
@@ -375,7 +434,7 @@ func (m *manager) initAPI() error {
 		exampleRouter.New(m.example, m.log),
 		healthRouter.New(m.services, m.log), // /healthz + /readyz on the health listener
 		authRouter.New(m.auth, m.role, m.log),
-		userRouter.New(m.user, m.role, m.auth, m.log),
+		userRouter.New(m.user, m.role, m.log),
 		roleRouter.New(m.role, m.log),
 		certRouter.New(m.certificate, m.log),
 		messagebusRouter.New(m.messagebus, m.log),
@@ -397,24 +456,85 @@ The supervisor deliberately installs no signal handlers
 
 | Signal | Action |
 |---|---|
-| SIGINT, SIGTERM | `m.Stop(true)` — graceful shutdown |
-| SIGHUP | `m.services.Restart(ctx)` — restart the whole service graph |
+| SIGINT, SIGTERM | first: `m.Stop(stopCtx)` in a goroutine — graceful shutdown; second: cancel `stopCtx`, which forces it; third: `os.Exit(1)` |
+| SIGHUP | `m.services.Restart(ctx)` — restart the whole service graph; ignored while shutting down |
 | SIGUSR1 | `m.Info(os.Stdout, true)` — dump service info |
-| SIGUSR2 | dump a full goroutine stack trace |
+| SIGUSR2 | dump a full goroutine stack trace, a stuck shutdown's included |
+
+The stop runs beside the loop, so the loop keeps hearing signals while it goes on: a stop
+called in the loop itself would leave the next SIGTERM to `signal.Notify`, which swallows it.
 
 ```go
 func (m *manager) listenSignals(ctx context.Context) {
 	signalCh := make(chan os.Signal, 1)
 	signal.Notify(signalCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGUSR1, syscall.SIGUSR2)
 	defer signal.Stop(signalCh)
+	done := ctx.Done()
+	stopCtx, force := context.WithCancel(context.Background())
+	defer force()
+	var stopped chan error
+	var forced bool
 	for {
 		select {
-		case <-ctx.Done():
+		case <-done:
 			m.log.Info("gracefully shutdown manager")
 			return
+		case err := <-stopped:
+			// log err, then
+			return
 		case sig := <-signalCh:
-			switch sig { /* the table above */ }
+			switch sig {
+			case syscall.SIGINT, syscall.SIGTERM:
+				switch {
+				case stopped == nil:
+					stopped = make(chan error, 1)
+					done = nil // the stop ends ctx, and stopped tells how it went
+					go func() { stopped <- m.Stop(stopCtx) }()
+				case !forced:
+					force()
+					forced = true
+				default:
+					os.Exit(1)
+				}
+			/* the rest of the table above */
+			}
 		}
 	}
 }
 ```
+
+## `migrate.go` — The One-Off Schema Run
+
+`Migrate` is a package function, not a `Server` method: it builds a bare
+manager over the same config, reuses `newLogger` and `newDatabase`, and
+initializes only the database — which migrates in `Init` — then returns.
+No supervisor, no other service, no listener, so the prod migrate Job can
+run it once per release while the replicas, whose config leaves
+`db.migration` out, never touch the schema:
+
+```go
+// Migrate is the one-off schema run (the prod Job) so replicas never race over
+// it; db.migration.version 0 means latest.
+func Migrate(ctx context.Context, configPath string) error {
+	m := &manager{config: newConfig(configPath)}
+	if err := m.initConfig(); err != nil {
+		return errors.Wrap(err)
+	}
+	if m.config.GetString("db.migration.dir") == "" {
+		return errors.InvalidArgument.Newf("db.migration.dir is not set: no migrations to apply")
+	}
+	m.log = m.newLogger()
+	database := m.newDatabase()
+	// db reads its settings from the config in ctx, as under the supervisor
+	ctx = confutil.WrapContext(ctx, confutil.New(m.config))
+	if err := database.Init(ctx); err != nil {
+		return errors.Wrapf(err, "failed to migrate the database")
+	}
+	m.log.Info("database migrated")
+	return nil
+}
+```
+
+The Job supplies the directory through the environment
+(`<PREFIX>_DB_MIGRATION_DIR=/app/migrations`, where the image carries them)
+— see [design/migrations.md](../design/migrations.md).

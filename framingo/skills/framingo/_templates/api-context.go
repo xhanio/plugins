@@ -168,21 +168,25 @@ func DiscoverHandlers(r any) map[string]any {
 // above and (2) implementing it on *ctx. Nothing else changes — handler
 // signatures stay `func(c api.Context) error`.
 //
-// Example, over your own pkg/types/entity package:
+// Example, over your own pkg/types/entity package. Put the reader in entity,
+// so services read the credential the same way handlers do:
+//
+//	// pkg/types/entity: works on c itself, because Value above answers
+//	// string keys from echo's store - pass c, not c.Request().Context()
+//	func CredentialFrom(ctx context.Context) (*Credential, bool) {
+//	    cred, ok := ctx.Value(common.ContextKeyCredential).(*Credential)
+//	    return cred, ok && cred != nil
+//	}
 //
 //	// in the Context interface:
 //	Credential() (*entity.Credential, bool)
 //
 //	// implementation:
 //	func (c *ctx) Credential() (*entity.Credential, bool) {
-//	    v := c.Get(fapi.ContextKeyCredential)
-//	    if v == nil {
-//	        return nil, false
-//	    }
-//	    cred, ok := v.(*entity.Credential)
-//	    return cred, ok
+//	    return entity.CredentialFrom(c)
 //	}
 //
 // The value is whatever your authentication middleware stored under
-// fapi.ContextKeyCredential. Framingo defines the key; the type is yours.
-// Session() over fapi.ContextKeySession follows the identical shape.
+// fapi.ContextKeyCredential (= common.ContextKeyCredential). Framingo defines
+// the key; the type is yours. Session() over fapi.ContextKeySession follows
+// the same shape: c.Get the key, then assert your *entity.Session.

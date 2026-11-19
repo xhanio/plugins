@@ -3,8 +3,8 @@
 // halves are called some variation of "the service interface".
 //
 //   pkg/types/model/order.go     — the BUSINESS contract. What consumers see.
-//   pkg/services/order/model.go  — the service's Manager: business + lifecycle.
-//                                  What the supervisor wiring sees.
+//   pkg/services/order/model.go  — the service's Manager: business + lifecycle,
+//                                  and its Repository. What the wiring sees.
 //
 // Routers and other services depend on model.Order. Only pkg/components/server
 // (the wiring) touches order.Manager. That's what keeps the implementation

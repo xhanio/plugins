@@ -26,7 +26,9 @@ var config []byte
 // convention throughout framingo.
 //
 // NOTE the dependency type: `model.Order`, the narrow business contract from
-// pkg/types/model — NOT `order.Manager` from pkg/services/order. Routers and
+// pkg/types/model — NOT `order.Manager` from pkg/services/order. A router
+// whose handlers need a second service's answer holds that service's model
+// interface too (the example's user router takes model.User and model.Role). Routers and
 // services depend on types/model so the implementation stays package-private
 // and nothing outside the service sees its lifecycle methods. Importing the
 // service package here is the mistake this layer exists to prevent.
@@ -56,8 +58,10 @@ func (r *router) Name() string {
 	return r.name
 }
 
-// Dependencies drives supervisor ordering: this router won't start before
-// the services it lists here.
+// Dependencies names the services this router calls (fapi.Router is a
+// common.Service). Routers are not registered with the supervisor: the api
+// server, registered after TopoSort, starts after every service, so the list
+// documents what the router leans on rather than ordering it.
 func (r *router) Dependencies() []common.Service {
 	return []common.Service{
 		r.svc,

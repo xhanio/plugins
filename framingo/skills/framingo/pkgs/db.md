@@ -29,14 +29,15 @@ dbMgr := db.New(
         Secure:   false,
         Params:   map[string]string{"sslmode": "disable"},
     }),
-    // maxOpen, maxIdle, maxLifetime, maxIdleTime, execTimeout — all five required
+    // maxOpen, maxIdle, maxLifetime, maxIdleTime, execTimeout; a zero is unset and
+    // takes the default (10, 5, 5m, never idle out, 30s) - but see Dynamic Config Keys
     db.WithConnection(10, 5, 5*time.Minute, 0, 30*time.Second),
-    db.WithMigration("migrations", 0),            // directory, target version (0 = latest)
+    db.WithMigration("migrations", 0),            // directory, target version (0 = latest); "" runs none
     db.WithLogger(logger),
 )
 ```
 
-If `WithType` names a driver that hasn't been blank-imported, `db.Manager` startup fails with `unsupported db type: <name> (driver not registered — blank-import the corresponding pkg/services/db/drivers/* package)`.
+If `WithType` names a driver that hasn't been blank-imported, `db.Manager`'s `Init` fails with `unsupported db type: <name> (driver not registered — blank-import the corresponding pkg/services/db/drivers/* package)`.
 
 Exact option signatures — **note `Source.Port` and `WithMigration`'s version are `uint`**, so read them with `GetUint`, not `GetInt`:
 
@@ -46,38 +47,70 @@ func WithName(name string) Option                 // also the config root: "clic
 func WithDataSource(source Source) Option
 func WithMigration(sqlDir string, version uint) Option
 func WithConnection(maxOpen, maxIdle int, maxLifetime, maxIdleTime, execTimeout time.Duration) Option
-func WithPlugins(plugins ...gorm.Plugin) Option   // installed on every connect; repeated calls append
-func WithLogger(logger log.Logger) Option
+func WithPlugins(plugins ...gorm.Plugin) Option   // installed in order on every connect; repeated calls append
+func WithLogger(logger log.Logger) Option         // Debug level also turns on GORM's statement log
 
 type Source struct {
     Host     string
     Port     uint                 // GetUint
     User     string
-    Password string
-    DBName   string
-    Secure   bool
-    Params   map[string]string    // GetStringMapString
+    Password string               // print:"-": left out of Info
+    DBName   string               // sqlite: the file path; empty is :memory:
+    Secure   bool                 // postgres sslmode=require, mysql tls=true, clickhouse secure=true - unless Params sets it
+    Params   map[string]string    // GetStringMapString; appended to the DSN, and on postgres they override the fields
 }
 ```
+
+## Drivers
+
+Each `drivers/*` subpackage registers a `db.Driver` under its type name in `init()`:
+
+```go
+type Driver struct {
+    Dialector func(dsn string) gorm.Dialector
+    Migration func(sqlDB *sql.DB) (database.Driver, error) // golang-migrate's
+    DSN       func(s Source) (string, error)
+    Cleanup   func(db *gorm.DB, dbName string, schema bool) error
+}
+
+func Register(dbtype string, d Driver) // panics if dbtype is already registered
+```
+
+An engine framingo does not ship is a package of your own that calls `db.Register` the same way; its type name is then a valid `WithType`. A field left nil fails the operation that needs it — no `Migration` fails `Init` only when a migration directory is set, no `Cleanup` fails `Cleanup` and `Reload`.
+
+## Migrations
+
+Every `Init` connects anew — a supervisor restart re-inits — and closes the pool it replaces once the queries already running on it finish. With a migration directory set, `Init` runs golang-migrate from `file://<dir>` right after connecting — every `Init`, so on every supervisor restart too: up to `version`, or all the way up with `0`. No change is a warning, not an error; any other failure fails `Init`. To migrate once per release instead of on every replica start, leave the directory empty in the daemon and run a one-off command that builds the same manager with it set and calls `Init` — the example's `exampleapp migrate` ([components-server.md](../app/components-server.md#migratego--the-one-off-schema-run)).
 
 ## Manager Interface
 
 ```go
 type Manager interface {
-    common.Service
+    model.Database
+    model.DatabaseDebugger
     common.Liveness      // Alive: guards the manager's wiring only (Init reconnects, so restart is the remedy)
-    common.Readiness     // Ready: pings the database - an unreachable server is not-ready, never a liveness failure
+    common.Readiness     // Ready: pings the database, capped at 3s - an unreachable server is not-ready, never a liveness failure
     common.Initializable
     common.Debuggable
+}
+
+// pkg/types/model
+type Database interface {
+    common.Service
     ORM() *gorm.DB                                                              // raw GORM access
     DB() *sql.DB                                                                // raw sql.DB access
     FromContext(ctx context.Context) *gorm.DB                                   // context-aware (extracts TX if present)
-    FromContextTimeout(ctx context.Context, timeout time.Duration) (*gorm.DB, context.CancelFunc)
-    Cleanup(schema bool) error                                                  // truncate tables (schema=true drops schema)
-    Reload() error                                                              // drop + re-migrate
-    Transaction(ctx context.Context, fn func(ctx context.Context) error, opts ...*sql.TxOptions) error
+    FromContextTimeout(ctx context.Context, timeout time.Duration) (*gorm.DB, context.CancelFunc) // 0 = exec_timeout
+    Transaction(ctx context.Context, fn func(tctx context.Context) error, opts ...*sql.TxOptions) error
+}
+
+type DatabaseDebugger interface {
+    Cleanup(schema bool) error                                                  // empty every table (schema=true drops and recreates the schema)
+    Reload() error                                                              // Cleanup(true) + re-migrate
 }
 ```
+
+The methods above split across two contracts. `model.Database` is what consumers hold — connections, queries, transactions — and the platform bundle hands it to repositories. `model.DatabaseDebugger` carries the destructive pair, `Cleanup` and `Reload`, for tests and dev tooling only; nothing holding a `model.Database` can reach them. Tests get both from `testutil.SetupDB()`, which returns the `db.Manager` on in-memory SQLite (needs `CGO_ENABLED=1`), and a test helper that only needs to clean up can return the narrower `model.DatabaseDebugger`. Each `SetupDB` call gets a database of its own, shared by every connection in its pool (a named in-memory database in shared-cache mode — a plain `:memory:` would give each connection a separate, empty one).
 
 ## Context-Aware Queries and Transactions
 
@@ -91,7 +124,8 @@ func (s *myService) GetUser(ctx context.Context, id string) (*User, error) {
     return &user, db.First(&user, "id = ?", id).Error
 }
 
-// Transaction - wraps fn in a DB transaction, rolls back on error or panic
+// Transaction - wraps fn in a DB transaction: commits on nil, rolls back on an
+// error (returned as is) or a panic (re-panicked after the rollback)
 err := s.dbMgr.Transaction(ctx, func(txCtx context.Context) error {
     // All FromContext calls within this fn use the same transaction
     if err := s.createOrder(txCtx, order); err != nil {
@@ -104,6 +138,8 @@ err := s.dbMgr.Transaction(ctx, func(txCtx context.Context) error {
 tx := dbMgr.ORM().Begin()
 txCtx := db.WrapContext(ctx, tx)
 ```
+
+A `Transaction` inside another — `ctx` already carries one — nests as a savepoint on that transaction rather than beginning a second one, so it takes no new connection (a one-connection pool cannot deadlock on it) and its `opts` are ignored. Its error rolls back to the savepoint only; the outer `fn` decides whether to return it.
 
 ## Tracing
 
@@ -218,11 +254,11 @@ where there is genuinely no context — schema setup, tests.
 
 ## Dynamic Config Keys
 
-During `Init(ctx)`, the DB manager re-reads these from the context `confutil.Config`, **overriding whatever `WithConnection` set at construction** — so a restart picks up pool changes without a rebuild. They are read under the instance's config root — `db` by default, or the `WithName` name, so a second instance (`db.WithName("clickhouse")`) reads `clickhouse.connection.*`:
+During `Init(ctx)`, the DB manager re-reads these from the context `confutil.Config` and **replaces whatever `WithConnection` set at construction** — so a restart picks up pool changes without a rebuild. The replacement is whole: a key the config does not set falls back to the default, not to the constructed value, so set the pool through these keys rather than `WithConnection`. They are read under the instance's config root — `db` by default, or the `WithName` name, so a second instance (`db.WithName("clickhouse")`) reads `clickhouse.connection.*`:
 - `db.connection.max_open` - max open connections
 - `db.connection.max_idle` - max idle connections
 - `db.connection.max_lifetime` - connection max lifetime
 - `db.connection.max_idle_time` - idle connection max lifetime
 - `db.connection.exec_timeout` - query execution timeout
 
-DB records implement the `orm.Record` interface — see [types.md](types.md) for the ORM base types.
+The manager takes any GORM model; nothing requires a record to implement `orm.Record` ([types.md](types.md#orm-base-types)), though the example's records declare it.

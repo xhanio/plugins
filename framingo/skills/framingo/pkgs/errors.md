@@ -25,9 +25,19 @@ errors.Unauthorized.Newf("invalid token")
 errors.Conflict.Newf("resource %s already exists", name)
 errors.NotImplemented.Newf("handler %s not found", funcName)
 
-// Category as bare sentinel (no message needed) — this is the ONLY valid use of New()
-return errors.NotImplemented.New()
+// A bare category is itself an error (status only, no message)
+return errors.Unauthorized
+
+// New() takes options — a code and details for the API's ErrorBody among them
+return errors.TooManyRequests.New(
+    errors.WithMessage("you have been rate limited"),
+    errors.WithCode("RATE_LIMIT", map[string]string{"ip": ip}), // -> ErrorBody.Code / .Details
+)
 ```
+
+Never `Newf("")` or a message-less `New()` on an error a caller will log: it
+is non-nil but its `Error()` is empty. A status-only signal is the bare
+category.
 
 ## Wrapping Errors
 
@@ -64,12 +74,21 @@ return errors.Combine(errs...)
 ## Checking Errors
 
 ```go
-// Check if error belongs to a category
+// Check the category: an error carries ONE, the outermost one set in its chain
 if errors.Is(err, errors.NotFound) { /* ... */ }
 
-// Check if error wraps a specific cause
-if errors.Has(err, ErrConnection) { /* ... */ }
+// Any other target is the stdlib search of the tree (sentinel errors)
+if errors.Is(err, ErrConnection) { /* ... */ }
+
+// Recover a concrete type — the package re-exports the stdlib's As
+var eb *api.ErrorBody
+if errors.As(err, &eb) { /* ... */ }
 ```
+
+`errors.Has` is the package's deprecated spelling of the sentinel search; use
+`Is`. Reading a category off an error is `Error.Category()`; finding one by
+its name is `errors.LookupCategory(name)`, which is how a client recovers the
+category from an `ErrorBody`'s `Kind` ([api.md](api.md#consuming-the-server-with-pkgservicesapiclient)).
 
 ## Available Error Categories
 
@@ -85,17 +104,23 @@ if errors.Has(err, ErrConnection) { /* ... */ }
 | `Conflict` | 409 | Resource already exists, concurrent modification |
 | `AlreadyExist` | 409 | Duplicate resource |
 | `TooManyRequests` | 429 | Rate limit exceeded |
-| `Cancaled` | 499 | Operation cancelled |
+| `Cancaled` | 499 | Operation cancelled (the identifier's spelling; its name — the wire `Kind` — is `Cancelled`) |
 | `Internal` | 500 | Unexpected internal errors |
 | `NotImplemented` | 501 | Unimplemented functionality |
 | `Unavailable` | 503 | Service unavailable |
 | `ResourceExhausted` | 503 | Out of resources |
 | `DBFailed` | 500 | Database operation failures |
 
+The API server turns a handler's error into the response by this table —
+status from the category, `Kind` from its name — and maps a bare
+`context.Canceled` / `context.DeadlineExceeded` to `Cancaled` /
+`DeadlineExceeded`; an uncategorised error is a 500
+([api.md](api.md#error-response-format)).
+
 ## Custom Categories
 
 ```go
-var ErrPaymentFailed = errors.NewCategory("PaymentFailed", 402)
+var ErrPaymentFailed = errors.NewCategory("PaymentFailed", 402) // also registers the name for LookupCategory
 
 // Then use like built-in categories:
 return ErrPaymentFailed.Newf("charge declined for order %s", orderID)

@@ -73,7 +73,8 @@ c.cli.SetHeaders(common.NewPair(fapi.HeaderKeySession, c.cred.SessionID))
 
 Operations take `ctx` and typed DTOs from the project's `pkg/types/api`,
 build a `client.Request`, `Send`, and decode — callers never see
-`*http.Request`:
+`*http.Request`. A request's `Path` joins onto the endpoint as is, so the
+endpoint is the API base with its prefix (`DefaultEndpoint`'s `/api/v1`):
 
 ```go
 // example.go

@@ -23,22 +23,35 @@ service level    services/system/  services/example/  owns: types/entity  types/
    │  may call: the repo level, via repo.* interfaces
    ▼
 repo level       services/repository/                 owns: types/orm  types/repo
-                 — the only code that touches db.Manager / GORM
+                 — the only code that touches the database / GORM
 ```
 
 - **Routers and middlewares call services, nothing lower.** Every example
-  router constructor takes `model.*` interfaces only; middlewares take the
-  service they lean on (`authz` → the role service). None of them imports
+  router constructor takes `model.*` interfaces only (the health router a
+  narrow `Supervisor` of its own); middlewares take the service they lean
+  on (`authz` → the role service). None of them imports
   `services/repository/`, `types/orm/`, or `db`.
 - **Services call the repo level, nothing lower.** They persist through
-  `repository.Repository` / `repo.*` interfaces and hand `entity` values
-  upward. No system or business service imports `db.Manager` or GORM —
-  grep the example: only `services/repository/` does. Peer services compose
+  their own `Repository` interface — the `repo.*` contracts declared in
+  their `model.go` — and hand `entity` values upward. No system or business
+  service holds `model.Database` or imports GORM — grep the example: only
+  `services/repository/` does (and the platform bundle that carries the
+  handle to it). Peer services compose
   through `model.*` interfaces (auth is built on `model.UserAuthN`), never
   by reaching past each other into the repo.
+- **A check that spans two services is the router's.** A service keeps the
+  rules about its own data; when a use case needs another service's answer
+  — that the role a user is given exists — the handler asks it before
+  calling the first. See
+  [design/who-decides.md#a-check-that-spans-two-services-is-the-handlers](../design/who-decides.md#a-check-that-spans-two-services-is-the-handlers).
 - **The repo level owns persistence.** `services/repository/` implements
   every `types/repo/` interface over `types/orm/` models; SQL, GORM, and
-  transactions live there and nowhere else.
+  transactions live there and nowhere else, and rows become `entity`
+  values before they leave it. It decides nothing: what a list leaves out,
+  what may not be deleted, how a password is hashed are the services' rules
+  — the repository counts, filters by the options it is given, and stores
+  what it is handed
+  ([design/data-access.md](../design/data-access.md)).
 
 Design in the same shape: the types are each layer's contract, so **write
 `types/*` first** — the order is in [types.md](types.md).
@@ -51,25 +64,26 @@ pkg/
 │   ├── client/example/          #   the SDK component (components-client.md)
 │   ├── cmd/app/  cmd/cli/       #   cobra trees: daemon / operator CLI (components-cmd.md)
 │   └── server/example/          #   the daemon: model, manager, lifecycle, config,
-│                                #   service, api, signal (components-server.md)
+│                                #   service, api, signal, migrate (components-server.md)
 ├── services/
 │   ├── repository/              # data access — implements every types/repo interface
-│   ├── system/                  #   auth/ certificate/ organization/ role/ user/
+│   ├── system/                  #   auth/ certificate/ organization/ role/ user/, and
+│   │                            #   platform/ (the plumbing bundle, not a service)
 │   └── example/                 # business tier
 ├── routers/                     # auth/ certificate/ example/ health/ messagebus/ role/ user/
 │   └── example/                 #   router.go, router.yaml, handler.go, router_test.go
 ├── middlewares/                 # authnagent/ authnuser/ authz/ cors/ deflate/ feature/ throttle/
-│   └── throttle/                #   middleware.go (+ option.go where configurable)
+│   └── throttle/                #   middleware.go, option.go, middleware_test.go
 ├── types/
 │   ├── api/ entity/ model/ orm/ repo/    # the five core categories
 │   └── message/ preset/ rbac/            # grown as the app needed them
 └── utils/
-    └── infra/                   # process-wide state: Debug, StartTime, ConfigDir, EnvPrefix
+    └── infra/                   # process-wide state: Debug, StartTime, SerialNumber, ConfigDir, EnvPrefix
 ```
 
 **IMPORTANT**: Every `pkg/` category directory is a grouping folder only —
 NEVER place Go source files directly in a category root. Nested grouping
-dirs are fine (`services/system/` holds five service packages); the rule
+dirs are fine (`services/system/` holds six packages); the rule
 still applies to them.
 
 ## Category Rules
@@ -79,15 +93,15 @@ still applies to them.
 | `components/cmd/` | Cobra command trees — one package per binary persona | One subdir per binary under `build/binary/`, names need not match: the example pairs `cmd/app` → `build/binary/exampleapp` and `cmd/cli` → `build/binary/examplecli`. No business logic — flag parsing and delegation only |
 | `components/server/` | Application daemon — owns the supervisor, wires all services, handles signals | Only place that knows about ALL services; one file per concern ([components-server.md](components-server.md)) |
 | `components/client/` | Go client SDK exposing typed methods over HTTP | Consumed by `components/cmd/cli/` and external callers; depends on `types/api/` + `types/entity/`, never on services |
-| `services/` | Business logic, in tiers: `repository/` (data access) → `system/` → business (`example/`) | Each service declares dependencies via `Dependencies()` and never imports a sibling service package — it takes the `types/model/` or `types/repo/` interface instead |
+| `services/` | Business logic, in tiers: `repository/` (data access) → `system/` → business (`example/`) | Each service declares dependencies via `Dependencies()` and never imports a sibling service package — it takes the peer's `types/model/` interface, and its own `Repository` (the `types/repo/` contracts it uses, in its `model.go`) for data |
 | `routers/` | HTTP handlers — each router owns a `router.yaml` + `Handlers()` returning `api.DiscoverHandlers(r)` | Split per package into `router.go` (wiring) + `handler.go` (bodies taking the project `api.Context`); business logic delegates to services ([routers.md](routers.md)) |
 | `middlewares/` | `fapi.Middleware` implementations, one package each | May depend on services (constructor + `Dependencies()`, like a router) — `authz` takes `role.Manager` ([middlewares.md](middlewares.md)) |
 | `types/api/` | Request/response DTOs, middleware config blocks, the project `api.Context` | Tags: `json`, `form`, `query`, `validate`. NO gorm tags |
 | `types/entity/` | Pure business domain models | Tags: `json` only. Returned from services to callers |
 | `types/model/` | Service **business** interfaces (`example.go` declares `model.Example`) | Imported by routers and other services so implementations stay package-private. Pairs with the service's own `Manager` — see below |
-| `types/orm/` | Database table models | Tags: `gorm` only. Must implement `TableName()`. Never exposed outside repository/services |
-| `types/repo/` | Repository interfaces, one file per domain | Implemented by `services/repository/`; services depend on the interface, never a concrete repo |
-| `utils/` | Shared helpers | Stateless — with `utils/infra` as the one deliberate exception: process-wide facts (`Debug`, `StartTime`, `ConfigDir`, `EnvPrefix`) set once at startup by the server component |
+| `types/orm/` | Database table models | Tags: `gorm` only. Must implement `TableName()`. Never exposed outside the repository: `types/repo` contracts speak `entity` |
+| `types/repo/` | Repository interfaces, one file per domain, plus inputs only the repository takes (`repo.UserCreateOptions`, carrying the password hash) | Implemented by `services/repository/`; services depend on the interface, never a concrete repo. Each embeds `repo.Repository` — `common.Service` plus `Transaction` — so a service opens a unit of work through the contract, never through the database |
+| `utils/` | Shared helpers | Stateless — with `utils/infra` as the one deliberate exception: process-wide facts (`Debug`, `StartTime`, `SerialNumber`, `ConfigDir`, `EnvPrefix`) set once at startup by the server component |
 
 Categories are not a closed set: the example grew `types/message/`,
 `types/preset/`, and `types/rbac/` as those domains emerged
@@ -100,7 +114,7 @@ Every service declares its interface in two places. They are not duplicates:
 | File | Declares | Consumed by |
 |---|---|---|
 | `types/model/example.go` | `model.Example` — business methods + `common.Service`, **no lifecycle** | Routers, other services |
-| `services/example/model.go` | `example.Manager` = `model.Example` + the lifecycle interfaces it implements | Only `components/server/` wiring |
+| `services/example/model.go` | `example.Manager` = `model.Example` + the lifecycle interfaces it implements; `example.Repository` = the `repo.*` contracts it uses | Only `components/server/` wiring |
 
 A router's constructor takes `model.Example`, never `example.Manager` —
 that's what stops the router from seeing (or calling) the service's
@@ -115,14 +129,15 @@ The example's helloworld walks all of them in ~30 lines of real code:
 [types.md](types.md).
 
 **Data flows**: router binds `api.HelloWorldCreateRequest` → calls
-`model.Example` → service persists via `repo.HelloWorld`/`orm.HelloWorld` →
-returns `entity.HelloWorld` → router sends it as JSON.
+`model.Example` → service persists via `repo.HelloWorld` → repository
+writes `orm.HelloWorld` and returns `entity.HelloWorld` → service returns it
+→ router sends it as JSON.
 
 ## Server Component — Application Daemon
 
 All server implementations MUST follow the fixed file-per-responsibility
 structure (`model.go` / `manager.go` / `lifecycle.go` / `config.go` /
-`service.go` / `api.go` / `signal.go`), specified in full — tiered service
+`service.go` / `api.go` / `signal.go` / `migrate.go`), specified in full — tiered service
 creation, registration order, signals — in
 [components-server.md](components-server.md). The reference implementation is
 [`example/pkg/components/server/example/`](https://github.com/xhanio/framingo/tree/main/example/pkg/components/server/example).

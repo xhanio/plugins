@@ -79,7 +79,8 @@ func (r *router) Example(c api.Context) error {
 Why this is the pattern:
 
 - **One value, both contracts.** `c` satisfies `echo.Context` (bind/respond) *and* `context.Context` — `r.em.HelloWorld(c, ...)` passes it straight through, so cancellation/deadlines propagate for free, no `c.Request().Context()` unwrap.
-- **Helpers have a home.** `BindAny`/`Validate` above, and `Credential()`/`Session()`/`TraceID()` where a handler needs auth state, live on the interface. Adding one later touches your `api.go` only — never every handler signature.
+- **Helpers have a home.** `BindAny`/`Validate` above; `BindPath()`/`BindQuery()`/`BindForm()` for typed parameters (`c.BindPath().MustInt32("id", &userID).BindError()` in the user router); `Credential()`/`Session()`/`TraceID()` where a handler needs auth state — `Credential()` is `entity.CredentialFrom(c)`, the same reader services use. All live on the interface. Adding one later touches your `api.go` only — never every handler signature.
+- **Bad input is a 400.** A failed bind is `errors.BadRequest`; `c.Validate` reports a failed `validate` tag as `InvalidArgument`, which the server answers with a 400 — so wrapping its error is enough ([design/who-decides.md](../design/who-decides.md#bad-input-is-a-400)).
 - **You own it.** The interface is project-side; extending it needs no framingo change.
 - **Zero framework cost.** `api.DiscoverHandlers(r)` wraps each `func(api.Context) error` into the `echo.HandlerFunc` the server registers. Raw `echo.Context` handlers still work as the fallback for third-party code — not the pattern for new handlers.
 
@@ -89,13 +90,24 @@ hands back — a `types/entity` value, serialized as JSON. It calls the
 service level through `model.Example` and nothing lower: no
 `services/repository/`, no `types/orm/`, no `db`. The constructor is the
 boundary — every example router takes only `model.*` interfaces and a
-logger ([layout.md](layout.md)); the health router's is framingo's own
-`model.Supervisor`. And the DTO and the `model.*` method are
+logger ([layout.md](layout.md)) — the messagebus router framingo's own
+`model.MessageBus`, the health router the narrow `Supervisor` it declares. And the DTO and the `model.*` method are
 designed before the handler is written — [types.md](types.md).
 
-Same for WebSocket handlers: `func(c api.Context, conn *websocket.Conn) error`.
+**A handler may orchestrate services, never decide for one.** When a
+request needs two services' answers — the user router checks with the role
+service that a role exists before the user service assigns it — the handler
+holds both `model.*` interfaces and puts them in order; the rules about a
+service's own data stay in that service. Why, and where the line falls:
+[design/who-decides.md#a-check-that-spans-two-services-is-the-handlers](../design/who-decides.md#a-check-that-spans-two-services-is-the-handlers).
 
-If a project has no `pkg/types/api/api.go` yet (i.e. it wasn't forked from `example/`), copy [`_templates/api-context.go`](../_templates/api-context.go) into it before writing handlers, and adjust the `entity` import to the project's own.
+Same for WebSocket handlers: `func(c api.Context, conn *websocket.Conn) error`,
+declared `method: WS`. The messagebus router's `Stream` hands the connection
+to `wsutil.Bridge` and returns; the server closes the connection by what the
+handler returned (`wsutil.Close`), and with `StatusGoingAway` when it stops
+([design/websockets.md](../design/websockets.md)).
+
+If a project has no `pkg/types/api/api.go` yet (i.e. it wasn't forked from `example/`), copy [`_templates/api-context.go`](../_templates/api-context.go) into it before writing handlers. It compiles with no project types; add `Credential()`/`Session()` over your own `entity` package as its closing "Extending Context" note shows.
 
 ## `router.go` — the wiring file
 
@@ -181,8 +193,65 @@ handlers:
 ```
 
 `server:` names which API server (an `api.<name>` entry in config.yaml)
-mounts this group; middleware names resolve against what the server
-component registered ([components-server.md](components-server.md)).
+mounts this group — it is required; middleware names resolve against what
+the server component registered ([components-server.md](components-server.md)).
+A route declared twice — in any group of any router — fails registration.
+The full schema is in [api.md](../pkgs/api.md#router-yaml-config-format-routeryaml).
+
+### Several groups, permissions, and fail-closed authz
+
+The user router shows the rest of the schema. Its `router.yaml` holds two
+handler groups, one YAML document each, both resolved against the one
+`Handlers()` map — `/users` (any account by ID, `local_user_manage_*`) and
+`/user` (the caller's own, resolved from the credential, `local_user_*`):
+
+```yaml
+# authz sits at group level, after authnuser: a handler-level entry wraps outermost
+# and would run before the credential is set.
+server: http
+prefix: /users
+middlewares:
+  - throttle
+  - authnuser
+  - authz
+handlers:
+  - method: GET
+    path: /:id
+    func: Get
+    permission: local_user_manage_read
+  # ...
+---
+server: http
+prefix: /user
+middlewares:
+  - throttle
+  - authnuser
+  - authz
+handlers:
+  - method: GET
+    path: /
+    func: GetCurrent
+    permission: local_user_read
+  # authz refuses a caller whose password must be reset, and this is where it is reset
+  - method: PUT
+    path: /passwords
+    func: ChangePassword
+    middlewares:
+      - authz: false
+```
+
+- **`permission:`** names the `types/rbac` constant the `authz` middleware
+  checks the caller's role against; the server only carries it to the
+  request. It means nothing to a route without `authz`.
+- **authz fails closed.** Under `authz`, a handler that declares no
+  `permission:` is refused, so a forgotten declaration locks the route
+  rather than opening it. A route every signed-in caller may reach opts out
+  with `- authz: false`. Why the route, not the service, decides:
+  [design/who-decides.md](../design/who-decides.md).
+- **Two routes, not a flag.** Whose account an operation touches is the
+  path's question: the `/user` handlers read the account from
+  `c.Credential()` and hand the service an ID; the service never asks who
+  is calling.
 
 ## `Handlers()` — always `DiscoverHandlers`
 
@@ -196,10 +265,13 @@ else.
 Don't hand-write the map (`map[string]any{"Example": r.Example}`) — it
 forces `echo.HandlerFunc` signatures, defeating `api.Context`, and rots on
 rename. Keep the debug line: methods that don't match a known signature are
-skipped **silently**, so the count is your only startup signal. Each example
-router also pins the yaml↔handler mapping in a `router_test.go` built on
-`newRouter` — every `func:` in the embedded `router.yaml` must resolve to a
-discovered handler.
+skipped **silently** — a `func:` naming one fails registration with
+`handler function <Name> not found in router.Handlers()`, at startup. Each
+example router pins the yaml↔handler mapping before that, in a
+`router_test.go` (`TestHandlersCoverConfig`) built on `newRouter` with nil
+services: every `func:` in the embedded `router.yaml` must resolve to a
+discovered handler. A multi-group router decodes the file document by
+document and asserts the group count too (`routers/user/router_test.go`).
 
 ## Wiring routers into the server
 

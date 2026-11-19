@@ -115,9 +115,9 @@ through the concrete manager's unexported field.
 every `Init`: `WithEnabled` (its own switch — choosing an exporter never
 implies it), `WithExporter(name, config)` (registry name + the kv block
 its factory strict-decodes; nil config = exporter defaults), and
-`WithInterval` (zero reads as unset and lands on the 60s default — a
-config key asking for literal zero also lands there, never on a spinning
-loop).
+`WithInterval` (zero or negative reads as unset and lands on the 60s
+default — a config key asking for literal zero also lands there, never on a
+spinning loop).
 
 The metric resource is the build's application identity and is **not
 configurable** — `service.name`/`service.version` come from
