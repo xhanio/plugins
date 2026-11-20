@@ -125,12 +125,11 @@ type manager struct {
 	mb         common.RawMessageSender
 	meter      fmodel.Meter
 
-	greeting string // dynamic config
+	mu       sync.RWMutex // guards greeting: Init rewrites it, a restart again
+	greeting string       // dynamic config
 
-	ctx    context.Context
-	cancel context.CancelFunc
-	looped chan struct{}  // closed as the run loop of the latest Start returns
-	wg     syncutil.WaitGroup // work the run loop hands off, whichever Start it came from
+	loop syncutil.Loop      // takes new work: Stop waits for it, no deadline
+	wg   syncutil.WaitGroup // work the loop hands off, from any Start: Stop waits until its ctx ends
 
 	inst *instruments // built once at Init
 }
@@ -261,9 +260,6 @@ func (m *manager) setDefaults() {
 	if m.name == "" {
 		m.name = nameutil.Name(m)
 	}
-	if m.ctx == nil {
-		m.ctx = context.Background()
-	}
 }
 
 // WithLogger stores the logger raw - newManager stamps it with By once the
@@ -298,10 +294,13 @@ func (m *manager) Init(ctx context.Context) error {
 	// dynamic config change, read under this service's root
 	config := confutil.FromContext(ctx)
 	root := nameutil.ConfigRoot(m.name)
+	// locked: requests read the greeting while a restart reloads it
+	m.mu.Lock()
 	m.applyOptions(
 		WithDynamicConfig(config.GetString("%s.greeting", root)),
 	)
 	m.setDefaults()
+	m.mu.Unlock()
 	if m.inst == nil {
 		inst, err := m.newInstruments()
 		if err != nil {
@@ -313,46 +312,37 @@ func (m *manager) Init(ctx context.Context) error {
 }
 
 func (m *manager) Start(ctx context.Context) error {
-	if m.cancel != nil {
+	if !m.loop.Start(ctx, m.run) {
 		m.log.Warnf("%s already started", m.Name())
-		return nil
 	}
-	ctx, cancel := context.WithCancel(m.ctx)
-	m.cancel = cancel
-	looped := make(chan struct{})
-	m.looped = looped
-	go func() {
-		defer close(looped)
-		// for/select with a single case on purpose: a ticker, a subscription
-		// channel or a work queue can be added as another case without
-		// restructuring anything. Work handed to its own goroutine runs in
-		// m.wg.Go, taking ctx as an argument.
-		for {
-			select {
-			case <-ctx.Done():
-				m.log.Infof("service %s stopped", m.Name())
-				return
-			}
-		}
-	}()
 	return nil
 }
 
 func (m *manager) Stop(ctx context.Context) error {
-	if m.cancel != nil {
-		m.cancel()
-		m.cancel = nil
-		<-m.looped
-	}
+	m.loop.Stop()
 	return m.wg.Wait(ctx)
+}
+
+// run is the template's run loop: add tickers or queues as cases, and hand
+// work that takes time to m.wg.Go, with ctx as an argument.
+func (m *manager) run(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			// return at once: Stop waits for the loop with no deadline, so slow cleanup goes in m.wg.Go
+			m.log.Infof("service %s stopped", m.Name())
+			return
+		}
+	}
 }
 ```
 
-This is the [`Daemon` contract](../pkgs/supervisor.md#the-daemon-contract). `Stop` returns
-only once the run loop has, so the next `Start` never runs beside it, then waits for `m.wg`,
-which counts the work of every start, until its `ctx` ends. Work a stop leaves runs on by
-itself, which is why it takes its start's `ctx` and channels as arguments rather than reading
-them from the manager.
+This is the [`Daemon` contract](../pkgs/supervisor.md#the-daemon-contract), its two waits
+one type each. `m.loop.Stop()` returns once the run loop has, with no deadline, so the next
+`Start` never runs beside it — which is why the loop returns as soon as its `ctx` ends and
+leaves anything slow to `m.wg`. `m.wg.Wait(ctx)` then waits for that work, from every start,
+until its `ctx` ends. Work a stop leaves runs on by itself, which is why it takes its start's
+`ctx` and channels as arguments rather than reading them from the manager.
 
 ## Health Probes
 
@@ -370,7 +360,7 @@ declared in its `model.go`):
 // exactly what a restart fixes - but no restart of this client raises a
 // database server: that is Ready's story.
 func (m *manager) Alive(_ context.Context) error {
-	if m.sqlDB == nil {
+	if m.DB() == nil {
 		return errors.Newf("database %s has no connection handle", m.Name())
 	}
 	return nil
@@ -379,12 +369,13 @@ func (m *manager) Alive(_ context.Context) error {
 // Ready: "can it serve right now" - derive from the caller's context,
 // capping it, never fabricating a fresh one.
 func (m *manager) Ready(ctx context.Context) error {
-	if m.sqlDB == nil {
+	sqlDB := m.DB()
+	if sqlDB == nil {
 		return errors.Newf("database %s has no connection handle", m.Name())
 	}
 	ctx, cancel := context.WithTimeout(ctx, healthCheckTimeout)
 	defer cancel()
-	if err := m.sqlDB.PingContext(ctx); err != nil {
+	if err := sqlDB.PingContext(ctx); err != nil {
 		return errors.Wrapf(err, "database ping failed")
 	}
 	return nil
@@ -412,7 +403,9 @@ func (m *manager) HelloWorld(ctx context.Context, message string) (*entity.Hello
 	if !ok {
 		return nil, traceutil.Fail(span, errors.Unauthorized.Newf("credential not found in context"))
 	}
+	m.mu.RLock()
 	greeting := m.greeting
+	m.mu.RUnlock()
 	if greeting == "" {
 		greeting = "hello world!"
 	}

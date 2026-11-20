@@ -1,11 +1,11 @@
 ---
 name: framingo
 description: Use when working with Framingo (`github.com/xhanio/framingo`) Go code — bootstrapping a new framingo backend project, creating services, registering with the supervisor, configuring HTTP servers/routers, the database service, pub/sub messaging, or implementing service lifecycle interfaces. Triggers on mentions of framingo, "new Go backend", service lifecycle, supervisor, handler groups, or any framingo package imports.
-compatibility: Requires Go 1.25+. Documents github.com/xhanio/framingo v0.9.0 — where the repo's go.mod pins a different framingo version, trust the code over this prose.
+compatibility: Requires Go 1.25+. Documents github.com/xhanio/framingo v0.9.1 — where the repo's go.mod pins a different framingo version, trust the code over this prose.
 metadata:
   author: xhanio
-  version: "1.7.0" # mirrors plugin.json; bump both together
-  framingo: v0.9.0 # the framework version these docs describe
+  version: "1.8.0" # mirrors plugin.json; bump both together
+  framingo: v0.9.1 # the framework version these docs describe
 ---
 
 # Framingo - Service-Oriented Go Framework
@@ -72,7 +72,9 @@ One file per concept, in two halves — `pkgs/` is how to **use framingo's packa
 | [design/who-decides.md](design/who-decides.md) | Route vs service vs handler: authz fails closed, the service does not ask who calls, cross-service checks in the handler, bad input is a 400 |
 | [design/narrow-contracts.md](design/narrow-contracts.md) | The smallest interface per dependency: a service's own `Repository`, `common.*` collaborators, message handlers as `Named` |
 | [design/data-access.md](design/data-access.md) | orm stays in the repository; `types/repo` contracts and repo-only inputs; the repository decides nothing |
-| [design/service-wiring.md](design/service-wiring.md) | Platform first, nil-tolerant `Dependencies`, one instance per name, the api server last by ordering |
+| [design/service-wiring.md](design/service-wiring.md) | Platform first, nil-tolerant `Dependencies`, one instance per name, the api server last by ordering, restarts invisible to dependents |
+| [design/lifecycle.md](design/lifecycle.md) | What a stop may leave: the taker always awaited; other work left, cut, or waited for per resource, by what it holds |
+| [design/config.md](design/config.md) | Config read in `Init` from the context, a restart as the reload; a reload published whole; the file re-read on SIGHUP alone |
 | [design/websockets.md](design/websockets.md) | `wsutil.Bridge`, `wsutil.Close`, the server closing its connections on stop |
 | [design/certificates.md](design/certificates.md) | CSRs keep the requester's key; a server CA and an agent CA; CA keys in the database alone; downloads encoded as the caller asks; TLS verifies each side against the CAs it is given |
 | [design/migrations.md](design/migrations.md) | Migrate on start locally, once per release in prod (`exampleapp migrate`), env-overridable config |
@@ -221,7 +223,7 @@ For the full category rules, type-separation example, server component file stru
 - Don't use the global Viper singleton — use the `confutil.Config` passed via `context.Context` (`confutil.FromContext(ctx)`), and read under the service's root (`"%s.key", nameutil.ConfigRoot(m.name)`) rather than a hardcoded one, or a second instance of the service reads the first one's config.
 - Don't fail `Alive` on a dependency outage — restarting the service raises no database; that fails `Ready` only. And probes take the caller's ctx: derive (`context.WithTimeout(ctx, cap)`), never fabricate from `Background()`.
 - Don't expect a query made through bare `db.ORM()` to appear inside the request's trace — it carries `context.Background()`, so with tracing wired its spans export as detached roots. Anything that gets a context to the statement parents correctly: `FromContext(ctx)`, `FromContextTimeout(ctx, d)`, or `ORM().WithContext(ctx)`. Prefer `FromContext(ctx)` — `ORM().WithContext(ctx)` traces the same but bypasses a transaction carried in the context, running on the base connection instead.
-- Don't let `Stop(ctx)` return while anything the service began is still going and `ctx` has not ended, don't let it wait past `ctx` either, and don't let what a stop left reach into the `Start` after it: the supervisor restarts the same instance. Share across starts only what outlives one, such as a `syncutil.WaitGroup` of all the work; give a start its own context, and its own of whatever hands out work or capacity. See the [`Daemon` contract](pkgs/supervisor.md#the-daemon-contract).
+- Don't let `Stop(ctx)` return while anything the service began is still going and `ctx` has not ended, don't let it wait past `ctx` either, and don't let what a stop left reach into the `Start` after it: the supervisor restarts the same instance. Share across starts only what outlives one, such as a `syncutil.WaitGroup` of all the work and the `syncutil.Loop` that takes it; give a start its own context — `Start`'s values without its cancel, so `Stop` alone ends it — and its own of whatever hands out work or capacity. See the [`Daemon` contract](pkgs/supervisor.md#the-daemon-contract).
 - Don't make a message handler a `Service` just to receive messages — `common.MessageHandler`/`RawMessageHandler` embed `common.Named`, and `MessageBus.Register` takes a `common.Named`: a name is all the bus keys the subscription on.
 - There is no `messagebus.AttachWebSocket` — a WS handler gets a `Messenger` from `NewMessenger(name)` and calls `wsutil.Bridge(conn, messenger)`. Don't close the conn in the handler: return, and the api server closes it per the returned error with `wsutil.Close` (and closes every open one when it stops).
 - In the example, `authz` fails closed: a handler under it that names no `permission:` is refused with 403. Every handler declares one, or opts out with `- authz: false` in its own `middlewares`.

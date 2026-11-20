@@ -41,6 +41,26 @@ was boilerplate that could be forgotten. Listing an optional source also
 orders it: a wired LDAP source is initialized and started before auth,
 which it was not while left out.
 
+## A restart is invisible to the dependents
+
+**Decision.** A dependent keeps its dependency's handle and asks it each
+time, never keeping what the handle hands out: the repository calls
+`db.FromContext(ctx)` for every query and stores no `*gorm.DB`. The
+supervisor restarts the failing service alone, never its dependents. So
+whatever a restart's `Init` replaces is swapped under the readers whole:
+`db.Manager`'s pool is one value behind an `atomic.Pointer`, and the
+configuration `Init` reloads is published whole ([config.md](config.md)).
+
+**Why.** A restart runs while requests are in flight. A dependent keeping
+what the handle handed out goes on using a pool the restart closed, and a
+field rewritten under a reader is a data race. Restarting the dependents too
+would drop their work for a fault that was not theirs.
+
+**Cost.** A query that took the old pool just before the swap may find it
+closed and fail once. Tests restart a service under load, under `-race`:
+`TestReInitUnderQueries` for the database, `TestReInitUnderRequests` for the
+example service.
+
 ## A name stands for one instance
 
 **Decision.** `Supervisor.Register` returns a `Conflict` for a second

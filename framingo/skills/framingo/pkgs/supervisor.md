@@ -32,6 +32,10 @@ type Debuggable interface { Info(w io.Writer, debug bool) }            // debug 
 run `Stop`, `Init` and `Start` on the same service.
 
 - `Start` on a started service does nothing.
+- What a start runs lives until `Stop`: `Start`'s `ctx` bounds the start alone and is never
+  kept, its values aside. The start's own context comes from
+  `context.WithCancel(context.WithoutCancel(ctx))`, as `syncutil.Loop` makes it, and only
+  `Stop` cancels it. `Stop`'s `ctx` bounds the stop the same way.
 - `Stop(ctx)` takes no new work, cancels the work going on, and waits for all of it to end,
   what an earlier `Stop` left included, until `ctx` ends. With `context.Background()` it
   waits as long as that takes.
@@ -46,6 +50,9 @@ run `Stop`, `Init` and `Start` on the same service.
 - `Stop` on a stopped service waits for what an earlier one left, until `ctx` ends. The
   supervisor, which leaves that to its services, returns at once.
 
+Which work a stop may leave, which it ends hard, and which the next start waits for depends
+on what the work holds: [design/lifecycle.md](../design/lifecycle.md).
+
 The bound is the caller's, carried by the context:
 
 - `WithStopPolicy(timeout)` gives the supervisor's whole shutdown, and the stop of each
@@ -55,7 +62,8 @@ The bound is the caller's, carried by the context:
 - An API that stops on request turns the grace period it was given into the context, with
   `context.WithTimeout`.
 
-Keep on the manager what lasts across starts: the service's state, and a `syncutil.WaitGroup`
+Keep on the manager what lasts across starts: the service's state, a `syncutil.Loop` for
+what takes new work, whose `Stop()` returns once the loop has, and a `syncutil.WaitGroup`
 that counts the work of every start, whose `Wait(ctx)` gives up when `Stop`'s context ends.
 Give a start its own context, and its own of whatever hands out work or capacity, such as a
 semaphore; what a stop leaves holds only those of the start it came from. A goroutine takes
@@ -244,7 +252,7 @@ func (m *manager) Init(ctx context.Context) error {
 
 Every getter takes a **format string**: with no args it is the key itself (`GetString("my.setting")`), otherwise it is Sprintf-ed first. That is how a service reads under its own root instead of a hardcoded one — `nameutil.ConfigRoot(m.name)` is the whole name when `WithName` gave one, or the package segment of the auto name (`services/db/manager` → `db`); see [app/services.md](../app/services.md).
 
-**You never call `WrapContext` yourself in a service.** The supervisor wraps the `Config` it was constructed with (`supervisor.New(confutil.New(viper), ...)`) into the context it passes to every service's `Init` — that's the whole delivery mechanism. The wiring layer keeps the viper itself: it owns the file, the env prefix and the watch.
+**You never call `WrapContext` yourself in a service.** The supervisor wraps the `Config` it was constructed with (`supervisor.New(confutil.New(viper), ...)`) into the context it passes to every service's `Init` — that's the whole delivery mechanism. The wiring layer keeps the viper itself: it owns the file, the env prefix, and when the file is re-read — the example on SIGHUP alone, with every service stopped ([design/config.md](../design/config.md)).
 
 `FromContext` **never returns nil**: with no config in the context it returns an empty `Config`, so every getter yields the zero value. No nil check is needed, but it also means a missing config looks like "all defaults" rather than an error — if a setting is mandatory, validate it in `Init`.
 

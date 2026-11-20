@@ -11,7 +11,7 @@ follow this file structure — one file per responsibility:
 components/server/example/
 ├── model.go     # Server interface (Named + Daemon + Initializable + Debuggable)
 ├── manager.go   # the manager struct and New() — fields and construction only
-├── config.go    # newConfig (viper + env prefix) and initConfig (read + watch)
+├── config.go    # newConfig (viper + env prefix), initConfig (read) and reload (SIGHUP's re-read)
 ├── service.go   # newLogger/newDatabase + initServices() — every service instance, tier by tier
 ├── lifecycle.go # Init/Start/Stop/Info — registration order, pprof, shutdown control
 ├── api.go       # initAPI() — registers middlewares and routers with the API server
@@ -111,7 +111,6 @@ func (m *manager) initConfig() error {
 	if err := m.config.ReadInConfig(); err != nil {
 		return errors.Wrapf(err, "failed to read config file %s", configFile)
 	}
-	m.config.WatchConfig()
 	absPath, err := filepath.Abs(configFile)
 	if err != nil {
 		return errors.Wrapf(err, "failed to resolve config path %s", configFile)
@@ -119,7 +118,33 @@ func (m *manager) initConfig() error {
 	infra.ConfigDir = filepath.Dir(absPath)
 	return nil
 }
+
+// reload is SIGHUP's, the one time the file is re-read: services stopped
+// first, no Init reads the config while it is rewritten, and every service
+// starts on one version of the file. A file that does not read changes nothing.
+func (m *manager) reload(ctx context.Context) error {
+	configFile := m.config.ConfigFileUsed()
+	check := viper.New()
+	check.SetConfigFile(configFile)
+	if err := check.ReadInConfig(); err != nil {
+		return errors.Wrapf(err, "config file %s does not read, nothing restarted", configFile)
+	}
+	if err := m.services.Stop(ctx); err != nil {
+		m.log.Errorf("failed to stop services for the reload: %s", err)
+	}
+	// changed again since the check: viper keeps what it had, and the services start on that
+	if err := m.config.ReadInConfig(); err != nil {
+		m.log.Errorf("failed to re-read config file %s, starting on the config already read: %s", configFile, err)
+	}
+	if err := m.services.Init(ctx); err != nil {
+		return errors.Wrap(err)
+	}
+	return errors.Wrap(m.services.Start(ctx))
+}
 ```
+
+Nothing watches the file: a change takes effect on SIGHUP, never by being
+written ([design/config.md](../design/config.md)).
 
 ## `service.go` — Service Creation, Tier by Tier
 
@@ -457,7 +482,7 @@ The supervisor deliberately installs no signal handlers
 | Signal | Action |
 |---|---|
 | SIGINT, SIGTERM | first: `m.Stop(stopCtx)` in a goroutine — graceful shutdown; second: cancel `stopCtx`, which forces it; third: `os.Exit(1)` |
-| SIGHUP | `m.services.Restart(ctx)` — restart the whole service graph; ignored while shutting down |
+| SIGHUP | `m.reload(ctx)` — check the config file reads, stop every service, re-read it, init and start them; a file that does not read changes nothing; ignored while shutting down |
 | SIGUSR1 | `m.Info(os.Stdout, true)` — dump service info |
 | SIGUSR2 | dump a full goroutine stack trace, a stuck shutdown's included |
 

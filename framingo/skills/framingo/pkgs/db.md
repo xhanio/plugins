@@ -80,7 +80,7 @@ An engine framingo does not ship is a package of your own that calls `db.Registe
 
 ## Migrations
 
-Every `Init` connects anew — a supervisor restart re-inits — and closes the pool it replaces once the queries already running on it finish. With a migration directory set, `Init` runs golang-migrate from `file://<dir>` right after connecting — every `Init`, so on every supervisor restart too: up to `version`, or all the way up with `0`. No change is a warning, not an error; any other failure fails `Init`. To migrate once per release instead of on every replica start, leave the directory empty in the daemon and run a one-off command that builds the same manager with it set and calls `Init` — the example's `exampleapp migrate` ([components-server.md](../app/components-server.md#migratego--the-one-off-schema-run)).
+Every `Init` connects anew — a supervisor restart re-inits — and swaps the new pool in whole, so a query reads one pool or the other, never one half built; the pool it replaces is closed once the queries already running on it finish. With a migration directory set, `Init` runs golang-migrate from `file://<dir>` right after connecting — every `Init`, so on every supervisor restart too: up to `version`, or all the way up with `0`. No change is a warning, not an error; any other failure fails `Init`. To migrate once per release instead of on every replica start, leave the directory empty in the daemon and run a one-off command that builds the same manager with it set and calls `Init` — the example's `exampleapp migrate` ([components-server.md](../app/components-server.md#migratego--the-one-off-schema-run)).
 
 ## Manager Interface
 
@@ -235,7 +235,7 @@ statement. Three forms carry one:
 func (m *manager) FromContext(ctx context.Context) *gorm.DB {
 	tx, ok := ctx.Value(common.ContextKeyTX).(*gorm.DB)
 	if !ok {
-		return m.ormDB.WithContext(ctx)
+		return m.ORM().WithContext(ctx)
 	}
 	return tx
 }
