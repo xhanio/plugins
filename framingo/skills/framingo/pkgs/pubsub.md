@@ -155,7 +155,10 @@ A handshake the client must begin with is `wsutil.ReadFirst[T](ctx, conn,
 timeout, reason)`: the first frame decoded into a `T`, or, none in time or
 one unreadable, a `CloseWith(StatusPolicyViolation, reason)` to return; a
 peer gone before it spoke is released with nothing sent, and
-`wsutil.PeerGone(err)` tells the two apart for the logs. What the frame must
+`wsutil.PeerGone(err)` tells the two apart for the logs. A `ctx` that ends
+first is a third case, `ctx.Err()`, neither — never met in the api server,
+which ends no WebSocket request's context and on stop closes the connection,
+a peer gone. What the frame must
 hold is the handler's to check, refusing with
 `wsutil.CloseWithCause(status, reason, why)`: the peer gets the reason, the
 error keeps why:
