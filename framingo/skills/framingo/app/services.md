@@ -116,6 +116,7 @@ files default to `package <service>` rather than `package <service>_test` —
 see [testing.md](testing.md).
 
 
+<!-- source: example/pkg/services/example/manager.go -->
 ```go
 type manager struct {
 	log  log.Logger
@@ -245,6 +246,7 @@ until someone misses the metric in production.
 
 ## `option.go`
 
+<!-- source: example/pkg/services/example/option.go -->
 ```go
 type Option func(*manager)
 
@@ -292,6 +294,7 @@ gave one (a second database named `clickhouse` reads
 `clickhouse.connection.*`). The name is the one identity; there is no
 second field. `Start` launches the run loop:
 
+<!-- source: example/pkg/services/example/lifecycle.go -->
 ```go
 func (m *manager) Init(ctx context.Context) error {
 	// dynamic config change, read under this service's root
@@ -357,6 +360,7 @@ already roll up into everything downstream. The framework's database
 manager is the worked example (`pkg/services/db/health.go`, interface halves
 declared in its `model.go`):
 
+<!-- source: pkg/services/db/health.go -->
 ```go
 // Alive: the service's own wiring ONLY. A liveness failure makes the
 // supervisor restart this service - Init reconnects, so a missing handle is
@@ -398,6 +402,7 @@ must either `traceutil.Fail` or `span.End()`), reads auth state from the
 context, delegates persistence to the repository — which hands back the
 entity — fires an event, and counts the call:
 
+<!-- source: example/pkg/services/example/business.go -->
 ```go
 func (m *manager) HelloWorld(ctx context.Context, message string) (*entity.HelloWorld, error) {
 	ctx, span := traceutil.Start(ctx, m.name, "HelloWorld")
@@ -418,6 +423,8 @@ func (m *manager) HelloWorld(ctx context.Context, message string) (*entity.Hello
 	if err != nil {
 		return nil, traceutil.Fail(span, errors.Wrap(err))
 	}
+	m.log.Infof("saved helloworld message %s to database with ID: %d", message, result.ID)
+
 	m.mb.SendRawMessage(ctx, m, "helloworld", result) // no return value — fire and forget
 	m.inst.hello.Add(ctx, 1)
 	span.End()

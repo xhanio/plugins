@@ -92,6 +92,7 @@ func New(configPath string) Server {
 during Init. The env prefix derives from the build-injected product name, and
 process-wide facts land in the project's `pkg/utils/infra`:
 
+<!-- source: example/pkg/components/server/example/config.go -->
 ```go
 func newConfig(configPath string) *viper.Viper {
 	conf := viper.New()

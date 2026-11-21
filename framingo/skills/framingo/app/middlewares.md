@@ -99,6 +99,7 @@ func WithName(name string) Option {
 A middleware is a `common.Service`: one that leans on services takes them in
 its constructor and declares them, exactly like a router —
 
+<!-- source: example/pkg/middlewares/authz/middleware.go -->
 ```go
 // middlewares/authz/middleware.go
 type middleware struct {

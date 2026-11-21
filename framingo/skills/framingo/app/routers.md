@@ -270,6 +270,7 @@ skipped **silently** — a `func:` naming one fails registration with
 example router catches that before startup, in a one-line `router_test.go`
 built on `newRouter` with nil services:
 
+<!-- source: example/pkg/routers/role/router_test.go -->
 ```go
 func TestRouter(t *testing.T) {
 	apitest.CheckRouter(t, newRouter(nil, log.Default))

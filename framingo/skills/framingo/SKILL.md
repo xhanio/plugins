@@ -1,11 +1,11 @@
 ---
 name: framingo
 description: Use when working with Framingo (`github.com/xhanio/framingo`) Go code — bootstrapping a new framingo backend project, creating services, registering with the supervisor, configuring HTTP servers/routers, the database service, pub/sub messaging, or implementing service lifecycle interfaces. Triggers on mentions of framingo, "new Go backend", service lifecycle, supervisor, handler groups, or any framingo package imports.
-compatibility: Requires Go 1.25+. Documents github.com/xhanio/framingo v0.9.3 — where the repo's go.mod pins a different framingo version, trust the code over this prose.
+compatibility: Requires Go 1.25+. Documents github.com/xhanio/framingo v0.9.4 — where the repo's go.mod pins a different framingo version, trust the code over this prose.
 metadata:
   author: xhanio
-  version: "1.10.0" # mirrors plugin.json; bump both together
-  framingo: v0.9.3 # the framework version these docs describe
+  version: "1.11.0" # mirrors plugin.json; bump both together
+  framingo: v0.9.4 # the framework version these docs describe
 ---
 
 # Framingo - Service-Oriented Go Framework
@@ -156,7 +156,9 @@ It formats, builds, vets, lints and tests (with `-race`) each module, runs
 every step even after one fails, and ends with `verified` or the list of
 what failed, exiting non-zero. Its `framingo vet` step — also a command of
 its own, `framingo vet ./...` — runs the framework's analyzers: a `Start`
-keeping its ctx, a held service missing from `Dependencies`. A lint or vet
+keeping its ctx, a held service missing from `Dependencies`, a service's
+`New` not taking the platform first, a `*gorm.DB` kept in a field, config
+read outside `Init`. A lint or vet
 failure names the design note it enforces — `(design/narrow-contracts.md)`
 — so read that note before changing the code or opting out; a `//nolint`,
 or a `//framingo:ignore <rule> <reason>` for an analyzer, carries its

@@ -231,6 +231,7 @@ statement. Three forms carry one:
 `FromContext` is not doing anything exotic — its non-transaction branch *is*
 `ORM().WithContext(ctx)`:
 
+<!-- source: pkg/services/db/context.go -->
 ```go
 func (m *manager) FromContext(ctx context.Context) *gorm.DB {
 	tx, ok := ctx.Value(common.ContextKeyTX).(*gorm.DB)
