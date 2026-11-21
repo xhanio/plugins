@@ -20,7 +20,7 @@ import (
 
 	"github.com/xhanio/framingo/pkg/types/common"
 
-	"myapp/pkg/types/entity"
+	"github.com/yourorg/myapp/pkg/types/entity"
 )
 
 // Order is the business contract. It embeds common.Service so a consumer can

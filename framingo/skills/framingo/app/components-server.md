@@ -137,10 +137,11 @@ func (m *manager) reload(ctx context.Context) error {
 	if err := m.config.ReadInConfig(); err != nil {
 		m.log.Errorf("failed to re-read config file %s, starting on the config already read: %s", configFile, err)
 	}
-	if err := m.services.Init(ctx); err != nil {
-		return errors.Wrap(err)
-	}
-	return errors.Wrap(m.services.Start(ctx))
+	// a failed Init still starts what it can, as at boot: the supervisor
+	// starts no service whose Init or dependencies failed, and the monitor
+	// restarts those
+	initErr := m.services.Init(ctx)
+	return errors.Wrap(errors.Combine(initErr, m.services.Start(ctx)))
 }
 ```
 
@@ -190,6 +191,9 @@ func (m *manager) initServices() error {
 	// services see the viper only as the read-side Config the supervisor carries into Init
 	m.services = supervisor.New(confutil.New(m.config),
 		supervisor.WithLogger(m.log),
+		// a Start that takes seconds is stuck: failing it here records why,
+		// within the liveness probe's budget for Init and every Start
+		supervisor.WithStartPolicy(10*time.Second),
 		// within the platform's stop timeout, so shutdown ends here, not in a SIGKILL
 		supervisor.WithStopPolicy(20*time.Second),
 		// probes feed /healthz and /readyz: without a sweep they would report
@@ -429,7 +433,8 @@ func (m *manager) Start(ctx context.Context) error {
 	if err := m.services.Start(ctx); err != nil {
 		return err
 	}
-	m.ctx, m.cancel = context.WithCancel(ctx)
+	// until Stop: Start's ctx bounds the start alone
+	m.ctx, m.cancel = context.WithCancel(context.WithoutCancel(ctx))
 	m.listenSignals(m.ctx)
 	return nil
 }
@@ -438,7 +443,11 @@ func (m *manager) Start(ctx context.Context) error {
 `Stop(ctx)` stops the graph, within `ctx` and the supervisor's stop policy, and cancels the
 context; `Info` delegates to `m.services.Info`. Give the supervisor a `WithStopPolicy` shorter
 than the platform's own stop timeout, so the shutdown ends there rather than in a SIGKILL —
-the example's 20s sits inside Kubernetes' default 30s termination grace period.
+the example's 20s sits inside Kubernetes' default 30s termination grace period. Give it a
+`WithStartPolicy` too: a `Start` only binds a listener or launches a loop, the slow work being
+`Init`'s, so one that takes seconds is stuck. The example's 10s fails it: the daemon exits
+with that start error, as on any failed start at boot, long before the liveness probe — whose
+listener starts last, after every `Start` — would give up on the pod.
 
 ## `api.go` — Middleware and Router Registration
 
@@ -483,7 +492,7 @@ The supervisor deliberately installs no signal handlers
 | Signal | Action |
 |---|---|
 | SIGINT, SIGTERM | first: `m.Stop(stopCtx)` in a goroutine — graceful shutdown; second: cancel `stopCtx`, which forces it; third: `os.Exit(1)` |
-| SIGHUP | `m.reload(ctx)` — check the config file reads, stop every service, re-read it, init and start them; a file that does not read changes nothing; ignored while shutting down |
+| SIGHUP | `m.reload(ctx)` — check the config file reads, stop every service, re-read it, init and start them, starting what it can after a failed init; a file that does not read changes nothing; ignored while shutting down |
 | SIGUSR1 | `m.Info(os.Stdout, true)` — dump service info |
 | SIGUSR2 | dump a full goroutine stack trace, a stuck shutdown's included |
 

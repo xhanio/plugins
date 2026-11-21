@@ -1,7 +1,7 @@
 // COPY THIS FILE to pkg/routers/<domain>/router.go and rename the package.
 // Wiring only — handler bodies go in handler.go, routes in router.yaml.
 //
-// Replace `myapp` with your module path and `order` with your domain.
+// Replace github.com/yourorg/myapp with your module path and `order` with your domain.
 package order
 
 import (
@@ -12,8 +12,8 @@ import (
 	"github.com/xhanio/framingo/pkg/utils/log"
 	"github.com/xhanio/framingo/pkg/utils/nameutil"
 
-	"myapp/pkg/types/api"
-	"myapp/pkg/types/model"
+	"github.com/yourorg/myapp/pkg/types/api"
+	"github.com/yourorg/myapp/pkg/types/model"
 )
 
 // Compile-time check that *router satisfies the framework's Router contract.

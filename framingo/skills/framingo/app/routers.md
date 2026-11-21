@@ -29,8 +29,8 @@ Router code imports both. The example project's convention (follow it):
 
 ```go
 import (
-    fapi "github.com/xhanio/framingo/pkg/types/api"  // FRAMEWORK: Router, Middleware, ContextKey*, ErrorBody
-    "myapp/pkg/types/api"                            // PROJECT (yours): Context, DiscoverHandlers, DTOs
+    fapi "github.com/xhanio/framingo/pkg/types/api" // FRAMEWORK: Router, Middleware, ContextKey*, ErrorBody
+    "github.com/yourorg/myapp/pkg/types/api"        // PROJECT (yours): Context, DiscoverHandlers, DTOs
 )
 ```
 

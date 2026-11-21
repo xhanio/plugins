@@ -16,12 +16,15 @@ against the code they point at and copy (`pkg/tools/docs`).
 |---|---|---|
 | depguard `routers` | a router or a middleware imports no service package | [narrow-contracts.md](narrow-contracts.md) |
 | depguard `services` | services do not import each other: each holds `types/model` interfaces, `model.Platform` among them | [narrow-contracts.md](narrow-contracts.md) |
+| depguard `framework` | a router, a middleware or a service imports no framework service package: it holds `common.*` or a `types/model` interface, and only the wiring imports `pkg/services/...` | [narrow-contracts.md](narrow-contracts.md) |
 | depguard `orm` | `types/orm` is imported by the repository alone | [data-access.md](data-access.md) |
 | depguard `errors`, forbidigo `fmt.Errorf` | errors come from `xhanio/errors`, which categorizes and wraps | — |
 | forbidigo `otel.Get*`/`Set*` | no otel globals: a handle is passed | — |
+| forbidigo `WatchConfig`/`OnConfigChange` | the config file is re-read on SIGHUP alone | [config.md](config.md) |
+| nolintlint | a `//nolint` names its linter, gives its reason and still silences something | — |
 | errcheck | a file's own `Close` is checked: a write the OS deferred fails there | — |
 | `framingo vet`: `startctx` | a `Start` keeps neither its ctx nor one derived from it — in a field, or in a goroutine it starts — unless cut with `context.WithoutCancel` | [lifecycle.md](lifecycle.md) |
-| `framingo vet`: `depslist` | a field holding a service is listed in the type's `Dependencies` | [service-wiring.md](service-wiring.md) |
+| `framingo vet`: `depslist` | a field holding a service is listed in the type's `Dependencies`, and the list is not filtered: no `if`, `switch` or type assertion in it | [service-wiring.md](service-wiring.md) |
 | `framingo vet`: `platformfirst` | an app service's `New` takes the platform first | [service-wiring.md](service-wiring.md) |
 | `framingo vet`: `gormfield` | no `*gorm.DB` is kept in a struct field outside the db service | [service-wiring.md](service-wiring.md) |
 | `framingo vet`: `confinit` | `confutil.FromContext` is called in `Init` alone | [config.md](config.md) |
@@ -29,6 +32,7 @@ against the code they point at and copy (`pkg/tools/docs`).
 | the example's `apitest.CheckRouter` | a declared `permission:` is one `rbac` defines | [who-decides.md](who-decides.md) |
 | `docs.Links`, in `pkg/tools/docs`'s own test of the repository | a relative markdown link reaches a file, its anchor a heading | — |
 | `docs.Snippets`, in the same test | a Go snippet marked `<!-- source: path -->` shows that file's functions and types as they are, comments aside | — |
+| `TestTemplatesPassVerify`, beside them in `pkg/tools/docs`; skipped with `-short` or without golangci-lint | an app laid out as the skill's Route B copies `_templates/` passes `framingo verify` | — |
 | `TestVersionSurfacesAgree` | the plugin's version in its two places, the framework version it documents in five | — |
 
 The boundary rules bind non-test files: a service's test builds the real
@@ -48,8 +52,9 @@ only code laid out that way.
 
 **Decision.** A line opts out of one analyzer with
 `//framingo:ignore <rule> <reason>`, on the reported line or the one above;
-without a reason it is not honoured. As with `//nolint`, the reason is the
-point.
+without a reason it is not honoured. A `//nolint` is held the same way, by
+nolintlint: it names its linter and gives its reason, and one that silences
+nothing is reported. The reason is the point.
 
 **Why.** A rule with no way out gets weakened until it fits its hardest
 case. The exceptions that exist say what the rule does not: a messenger
@@ -66,7 +71,7 @@ agent to run it after any change. The command is the framework module's own
 root package — `go install github.com/xhanio/framingo@latest` — so it is
 versioned with the framework and its rules, by the one tag.
 
-**Why.** Five commands are four chances to skip one, and a coding agent
+**Why.** Six commands are five chances to skip one, and a coding agent
 needs a single answer to "is this change sound" that it cannot talk itself
 past. A command, not a script copied into each app: a copy stays at the
 version it was copied at, and a shell script runs on no Windows. It only

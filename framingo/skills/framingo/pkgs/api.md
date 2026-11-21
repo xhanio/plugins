@@ -145,8 +145,8 @@ import (
     "github.com/xhanio/framingo/pkg/utils/log"
     "github.com/xhanio/framingo/pkg/utils/nameutil"
 
-    "myapp/pkg/services/user"
-    "myapp/pkg/types/api"
+    "github.com/yourorg/myapp/pkg/types/api"
+    "github.com/yourorg/myapp/pkg/types/model"
 )
 
 var _ fapi.Router = (*router)(nil) // compile-time interface check
@@ -158,16 +158,16 @@ var config []byte
 type router struct {
     name string
     log  log.Logger
-    svc  user.Manager
+    svc  model.User // the business interface, never the service package
 }
 
 // New returns the interface; newRouter returns the concrete type, the form
 // package tests construct.
-func New(svc user.Manager, log log.Logger) fapi.Router {
+func New(svc model.User, log log.Logger) fapi.Router {
     return newRouter(svc, log)
 }
 
-func newRouter(svc user.Manager, log log.Logger) *router {
+func newRouter(svc model.User, log log.Logger) *router {
     r := &router{svc: svc, log: log}
     r.name = nameutil.Name(r) // project-relative, layout root stripped: routers/user/router
     return r
@@ -222,7 +222,7 @@ The method name is the map key, so it must match `func:` in `router.yaml` exactl
 package user
 
 import (
-    "myapp/pkg/types/api"
+    "github.com/yourorg/myapp/pkg/types/api"
 )
 
 // Recommended: handlers take the project-defined api.Context (which embeds

@@ -50,7 +50,7 @@ That is a compile error, not a style preference. The fix is `package db_test`, w
 
 The same constraint applies to:
 
-- `pkg/services/tracing` — `tracing/exporters/*` call `tracing.Register`
+- `pkg/services/tracing` and `pkg/services/metrics` — their `exporters/*` call `tracing.Register` and `metrics.Register`
 - **any helper package that imports the package under test** — `pkg/utils/testutil` imports `db`, so only an external test package can use `testutil.SetupDB` inside `db`'s own tests
 
 Apply the same reasoning to an application's own registries.
@@ -104,12 +104,12 @@ func setup(t *testing.T, mb model.MessageBus) *manager {
 | Helper | Gives you |
 |---|---|
 | `SetupDB()` | an initialized `db.Manager` on in-memory SQLite, so a test exercises real SQL instead of a repository double (needs `CGO_ENABLED=1`). Each call gets a database of its own, shared by every connection in its pool. The manager also carries `model.DatabaseDebugger` — `Cleanup`/`Reload` — which a test cleans up through; the services under test get it as a plain `model.Database` and cannot |
-| `NewTracer(provider)` + `Swap(provider)` | a `model.Tracer` whose provider can be replaced mid-flight, standing in for a tracing-service restart |
+| `NewTracer(provider)` + `Swap(provider)` | a `model.Tracer` whose provider can be replaced mid-flight — the case `traceutil.LiveProvider` is for; the tracing service's own provider is never replaced |
 | `NewRecorder()` | in-memory exporter + synchronous provider, so a span is readable the moment it ends |
-| `NewMeter(provider)` | a `model.Meter` over the given provider — no `Swap`: the metrics service never replaces its provider |
+| `NewMeter(provider)` | a `model.Meter` over the given provider |
 | `NewMeterRecorder()` | a `ManualReader` + provider, so a test collects what was recorded when it asks |
 | `SumInt64(rm, name)` / `Histogram[N](rm, name)` | read one metric out of collected `ResourceMetrics`; assert the `found` bool, so a missing or misnamed metric is not read as zero |
 
-The example service's `TestHelloWorldIncrementsCounter` is the meter trio at work: `newManager(platform.New(nil, testutil.NewMeter(provider), nil, fakeMB{}), fakeRepo{})`, two calls, `reader.Collect`, then `SumInt64(rm, "example.hello.total")`. A test that needs *some* `model.Meter` with no assertions takes `metrics.New()`, which needs no setup — or passes nil, and the service mints noop instruments.
+The example service's `TestHelloWorldIncrementsCounter` is the meter trio at work: `newManager(platform.New(nil, testutil.NewMeter(provider), nil, fakeMB{}), fakeRepo{})`, two calls, `reader.Collect`, then `SumInt64(rm, "example.hello.total")`. A test that needs *some* `model.Meter` with no assertions takes `metrics.New()`, which needs no setup: a platform handle is never nil, in a test as in the wiring.
 
-Reach for `NewTracer` only when the test actually swaps a provider — the real tracing service only does that through `Init`. A test that merely needs *some* `model.Tracer` is better served by `tracing.New()`, which serves a noop provider with no `Init`, config or exporter. See [../pkgs/tracing.md](../pkgs/tracing.md).
+Reach for `NewTracer` only when the test actually swaps a provider — the real tracing service never does: its `Init` replaces the pipeline behind a provider that stays the same. A test that merely needs *some* `model.Tracer` is better served by `tracing.New()`, which serves a noop provider with no `Init`, config or exporter. See [../pkgs/tracing.md](../pkgs/tracing.md).

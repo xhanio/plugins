@@ -1,11 +1,11 @@
 ---
 name: framingo
 description: Use when working with Framingo (`github.com/xhanio/framingo`) Go code — bootstrapping a new framingo backend project, creating services, registering with the supervisor, configuring HTTP servers/routers, the database service, pub/sub messaging, or implementing service lifecycle interfaces. Triggers on mentions of framingo, "new Go backend", service lifecycle, supervisor, handler groups, or any framingo package imports.
-compatibility: Requires Go 1.25+. Documents github.com/xhanio/framingo v0.9.4 — where the repo's go.mod pins a different framingo version, trust the code over this prose.
+compatibility: Requires Go 1.25+. Documents github.com/xhanio/framingo v0.9.5 — where the repo's go.mod pins a different framingo version, trust the code over this prose.
 metadata:
   author: xhanio
-  version: "1.11.0" # mirrors plugin.json; bump both together
-  framingo: v0.9.4 # the framework version these docs describe
+  version: "1.12.0" # mirrors plugin.json; bump both together
+  framingo: v0.9.5 # the framework version these docs describe
 ---
 
 # Framingo - Service-Oriented Go Framework
@@ -19,7 +19,7 @@ Framingo is a modular, production-ready Go framework for building HTTP API appli
 - **Bootstrapping a new framingo backend project** (see [Starting a New Backend](#starting-a-new-backend) below)
 - Creating a new framingo service or `Manager` interface
 - Registering services with the supervisor or wiring service dependencies
-- Implementing the lifecycle interfaces (`Service`, `Initializable`, `Daemon`, `Liveness`, `Readiness`, `Debuggable`)
+- Implementing the lifecycle interfaces (`Service`, `Initializable`, `Daemon`, `Liveness`, `Readiness`, `Debuggable`, `Reconcilable`)
 - Configuring HTTP servers, routers, handler groups, middlewares, or WebSocket routes
 - Working with the database service (`db.Manager`, transactions, migrations)
 - Publishing or subscribing on the pub/sub bus
@@ -72,12 +72,12 @@ One file per concept, in two halves — `pkgs/` is how to **use framingo's packa
 | [design/who-decides.md](design/who-decides.md) | Route vs service vs handler: authz fails closed, the service does not ask who calls, cross-service checks in the handler, bad input is a 400 |
 | [design/narrow-contracts.md](design/narrow-contracts.md) | The smallest interface per dependency: a service's own `Repository`, `common.*` collaborators, message handlers as `Named` |
 | [design/data-access.md](design/data-access.md) | orm stays in the repository; `types/repo` contracts and repo-only inputs; the repository decides nothing |
-| [design/service-wiring.md](design/service-wiring.md) | Platform first, nil-tolerant `Dependencies`, one instance per name, the api server last by ordering, restarts invisible to dependents |
-| [design/lifecycle.md](design/lifecycle.md) | What a stop may leave: the taker always awaited; other work left, cut, or waited for per resource, by what it holds |
+| [design/service-wiring.md](design/service-wiring.md) | Platform first, nil-tolerant `Dependencies`, one instance per name, the api server last by ordering, restarts invisible to dependents, a dependent `Reconcile`s what it registered with a dependency stopped or started alone |
+| [design/lifecycle.md](design/lifecycle.md) | What a start waits for: each `Start` bounded, a service started once its `Init` succeeded and its dependencies run. What a stop may leave: the taker always awaited; other work left, cut, or waited for per resource, by what it holds |
 | [design/config.md](design/config.md) | Config read in `Init` from the context, a restart as the reload; a reload published whole; the file re-read on SIGHUP alone |
 | [design/websockets.md](design/websockets.md) | `wsutil.Bridge`, `wsutil.Close`, the server closing its connections on stop |
 | [design/certificates.md](design/certificates.md) | CSRs keep the requester's key; a server CA and an agent CA; CA keys in the database alone; downloads encoded as the caller asks; TLS verifies each side against the CAs it is given |
-| [design/checks.md](design/checks.md) | Which decisions a machine checks, and by what: the lint config's import boundaries and forbidden calls |
+| [design/checks.md](design/checks.md) | Which decisions a machine checks, and by what: the lint config's import boundaries and forbidden calls, `framingo vet`'s analyzers, the router, docs and template tests; how an exception carries its reason; `framingo verify` |
 | [design/migrations.md](design/migrations.md) | Migrate on start locally, once per release in prod (`exampleapp migrate`), env-overridable config |
 
 ## Starting a New Backend
@@ -116,7 +116,7 @@ mkdir -p cmd/myapp \
 cp <skill>/_templates/api-context.go pkg/types/api/api.go
 
 # Canonical router triple — copy per domain, rename the package,
-# replace the `myapp` import paths with your module path.
+# replace github.com/yourorg/myapp with your module path.
 mkdir -p pkg/routers/order pkg/services/order
 cp <skill>/_templates/{router.go,handler.go,router.yaml} pkg/routers/order/
 
@@ -130,7 +130,7 @@ cp <skill>/_templates/golangci.yml .golangci.yml
 go install github.com/xhanio/framingo@latest
 ```
 
-All five `types/` subdirs are part of the layout ([app/layout.md](app/layout.md)); `model/` in particular is **not optional** — the router template imports `myapp/pkg/types/model`.
+All five `types/` subdirs are part of the layout ([app/layout.md](app/layout.md)); `model/` in particular is **not optional** — the router template imports `github.com/yourorg/myapp/pkg/types/model`.
 
 `_templates/api-context.go` is self-contained (no project types). Its trailing comment shows how to add `Credential()`/`Session()` accessors over your own `entity` package once you have one.
 
@@ -156,9 +156,10 @@ It formats, builds, vets, lints and tests (with `-race`) each module, runs
 every step even after one fails, and ends with `verified` or the list of
 what failed, exiting non-zero. Its `framingo vet` step — also a command of
 its own, `framingo vet ./...` — runs the framework's analyzers: a `Start`
-keeping its ctx, a held service missing from `Dependencies`, a service's
+keeping its ctx, a held service missing from `Dependencies` or a
+`Dependencies` that filters, a service's
 `New` not taking the platform first, a `*gorm.DB` kept in a field, config
-read outside `Init`. A lint or vet
+read outside `Init`. A boundary or vet
 failure names the design note it enforces — `(design/narrow-contracts.md)`
 — so read that note before changing the code or opting out; a `//nolint`,
 or a `//framingo:ignore <rule> <reason>` for an analyzer, carries its
@@ -243,7 +244,7 @@ For the full category rules, type-separation example, server component file stru
 - Don't hand-write `api.Context`/`DiscoverHandlers` from this skill's prose — copy [_templates/api-context.go](_templates/api-context.go). A reconstruction compiles but diverges, and every handler in the project then depends on the divergence.
 - Don't give a router a `pkg/services/...` dependency — it takes the `model.X` business interface. Importing the service package leaks the implementation and its lifecycle methods.
 - Don't skip a layer: routers and middlewares call services only — never `services/repository/`, `types/orm/`, or `db`; services persist through their own `Repository` interface — the `repo.*` contracts declared in their `model.go` — never `db.Manager`/GORM directly. `orm` types stop at the repository boundary — the repository maps rows to `entity` and the `repo` contracts speak entity only — and `api` DTOs stop at the router.
-- Don't give the api server dependencies to order its start. To the supervisor a dependency also gates `Init` — a dependency that failed its init keeps the dependent's from running — and rolls health up, so the listener, health listener included, would stay down whenever any service behind a route failed. Register it after `TopoSort` instead: an ordering, not a dependency.
+- Don't give the api server dependencies to order its start. To the supervisor a dependency also gates `Init` and `Start` — a dependency that failed its init or start keeps the dependent's from running — and rolls health up, so the listener, health listener included, would stay down whenever any service behind a route failed. Register it after `TopoSort` instead: an ordering, not a dependency.
 - `supervisor.Register` returns an error — handle it. It refuses another instance under a name already taken (two `db` managers without `WithName`, say), which used to drop the second one from the graph silently, never initialized or started.
 - `SendMessage`/`SendRawMessage` return **nothing** and take the sender as the second arg: `mb.SendRawMessage(ctx, m, kind, payload)`. `if err := mb.SendMessage(...)` does not compile.
 - `pubsub.Subscribe(name, topic)` returns a **channel**, not a handler registration — there is no `Subscribe(topic, handler)`. For handler-style dispatch use `messagebus`.
@@ -256,6 +257,8 @@ For the full category rules, type-separation example, server component file stru
 - Don't fail `Alive` on a dependency outage — restarting the service raises no database; that fails `Ready` only. And probes take the caller's ctx: derive (`context.WithTimeout(ctx, cap)`), never fabricate from `Background()`.
 - Don't expect a query made through bare `db.ORM()` to appear inside the request's trace — it carries `context.Background()`, so with tracing wired its spans export as detached roots. Anything that gets a context to the statement parents correctly: `FromContext(ctx)`, `FromContextTimeout(ctx, d)`, or `ORM().WithContext(ctx)`. Prefer `FromContext(ctx)` — `ORM().WithContext(ctx)` traces the same but bypasses a transaction carried in the context, running on the base connection instead.
 - Don't let `Stop(ctx)` return while anything the service began is still going and `ctx` has not ended, don't let it wait past `ctx` either, and don't let what a stop left reach into the `Start` after it: the supervisor restarts the same instance. Share across starts only what outlives one, such as a `syncutil.WaitGroup` of all the work and the `syncutil.Loop` that takes it; give a start its own context — `Start`'s values without its cancel, so `Stop` alone ends it — and its own of whatever hands out work or capacity. See the [`Daemon` contract](pkgs/supervisor.md#the-daemon-contract).
+- Don't keep in a field what a dependency hands out — a `*gorm.DB`, the `*sql.DB` from `DB()`: the supervisor restarts a dependency alone, and what it handed out may be what the restart closed. Keep the handle and ask it each time ([design/service-wiring.md](design/service-wiring.md#a-restart-is-invisible-to-the-dependents)). What a handle promises to keep across its restart may be kept: the meter's provider and the instruments built from it, the tracing service's provider and a `Tracer` from it. `framingo vet` holds the `*gorm.DB` case alone; the rest is for review.
+- A service that registers with a dependency — subscribes to pubsub, adds tasks to a task manager — implements `common.Reconcilable` and puts back what it holds on `DependencyRunning`: the dependency forgets it when it stops, and the supervisor restarts the dependency alone. `Reconcile` acts on the state it is given alone, registers and nothing slower, and never calls the supervisor ([pkgs/supervisor.md](pkgs/supervisor.md#reconciling-with-a-dependency)).
 - Don't make a message handler a `Service` just to receive messages — `common.MessageHandler`/`RawMessageHandler` embed `common.Named`, and `MessageBus.Register` takes a `common.Named`: a name is all the bus keys the subscription on.
 - There is no `messagebus.AttachWebSocket` — a WS handler gets a `Messenger` from `NewMessenger(name)` and calls `wsutil.Bridge(conn, messenger)`. Don't close the conn in the handler: return, and the api server closes it per the returned error with `wsutil.Close` (and closes every open one when it stops).
 - In the example, `authz` fails closed: a handler under it that names no `permission:` is refused with 403. Every handler declares one, or opts out with `- authz: false` in its own `middlewares`.

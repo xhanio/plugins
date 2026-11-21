@@ -37,13 +37,15 @@ they are: `[]common.Service{m.repository, m.mb}`, and the auth service's
 optional LDAP and API-token sources too. Platform handles are never nil -
 the platform is infrastructure - but an optional source the app did not
 wire is, and the supervisor skips a nil entry everywhere it walks
-`Dependencies` — registering, the init gate, the health monitor.
+`Dependencies` — registering, the init and start gates, the health
+monitor, the reconciles.
 
 The meter is the one handle held and not listed. A dependency gates `Init`
-and rolls its health up, and telemetry never gates a service: recording
+and `Start` and rolls its health up, and telemetry never gates a service: recording
 works whatever the collector does, before the metrics service starts as
 after. Being always there and being depended on are two things. The
-`depslist` analyzer holds the rule, and the meter's field carries
+`depslist` analyzer holds the rule — a held service listed, the list not
+filtered — and the meter's field carries
 `//framingo:ignore depslist` with that reason ([checks.md](checks.md)).
 
 **Why.** A filter in every `Dependencies()` (type assertions, `if x != nil`)
@@ -60,16 +62,42 @@ supervisor restarts the failing service alone, never its dependents. So
 whatever a restart's `Init` replaces is swapped under the readers whole:
 `db.Manager`'s pool is one value behind an `atomic.Pointer`, and the
 configuration `Init` reloads is published whole ([config.md](config.md)).
+What a handle hands out to be kept stays the same across its restart, the
+restart swapping what is under it: the metrics service's provider outlives
+its exporter, and the tracing service's provider follows the pipeline its
+`Init` rebuilds, so a library that keeps its `Tracer` survives the restart.
+
+What a dependent registered with a dependency — a subscription, a task — is
+the dependent's to put back, since the dependency's state lasts no longer
+than its run: a stop forgets it. A dependent that registers is a
+`common.Reconcilable`, and when the supervisor stops or starts the
+dependency alone it calls `Reconcile(ctx, dep, state)` on each such
+dependent that runs on — `DependencyStopped` once the stop is done,
+`DependencyRunning` or `DependencyFailed` once the start is — and the
+dependent brings what it holds there in line: the plan manager adds its
+tasks again, the messagebus subscribes its modules again.
 
 **Why.** A restart runs while requests are in flight. A dependent keeping
 what the handle handed out goes on using a pool the restart closed, and a
 field rewritten under a reader is a data race. Restarting the dependents too
-would drop their work for a fault that was not theirs.
+would drop their work for a fault that was not theirs. The dependency's own
+state is the dependency's, and what was registered with it the dependent's:
+the one that holds a thing is the one that keeps it. Reconcile is a direct
+call, not an event on a bus: it is sent through no transport the restart
+may have taken down, is never dropped, and every dependent is in line before
+the restart is done. It names a state, never a moment — a stop is told once
+it is done, not while it is coming — so a dependent acts on what the
+dependency is, and a call that finds nothing to do changes nothing.
 
 **Cost.** A query that took the old pool just before the swap may find it
-closed and fail once. Tests restart a service under load, under `-race`:
-`TestReInitUnderQueries` for the database, `TestReInitUnderRequests` for the
-example service.
+closed and fail once, and a call to a restarting dependency fails until the
+dependent has reconciled. The rule is held by review, `gormfield` aside: a check
+for every value a dependent keeps would follow it through helpers and into
+goroutines, and would have to tell a handout that may be kept by the
+handle's promise, not by its type. Tests restart a service under load, under
+`-race` — `TestReInitUnderQueries` for the database, `TestReInitUnderRequests`
+for the example service — and a dependency under its dependents:
+`TestATaskManagerRestartUnderThePlans`, `TestAPubsubRestartUnderTheMessageBus`.
 
 ## A name stands for one instance
 
@@ -85,7 +113,7 @@ name; a second instance under it would never run.
 **Decision.** The api server declares no dependencies; the wiring registers
 it after `TopoSort`, so it starts after every service.
 
-**Why.** A dependency gates `Init` and rolls health up: depending on the
-services would keep the listener — the health listener with it — down
+**Why.** A dependency gates `Init` and `Start` and rolls health up:
+depending on the services would keep the listener — the health listener with it — down
 whenever one of them failed, while `/healthz` and `/readyz` should report
 exactly that.

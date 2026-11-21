@@ -10,7 +10,7 @@ Reference config structure for all framework services. Use this as a template wh
 supervisor:
   monitor:
     interval: 10s             # probe every service this often; 0 disables monitoring
-    max_retries: 3            # in-process restarts on failed liveness, then /healthz fails
+    max_retries: 3            # in-process restarts per service; then /healthz fails if liveness failed
     restart_delay: 5s
 
 # Logging — used by log.New() in service.go
@@ -125,7 +125,7 @@ pprof:
 - `api.<name>.middlewares` is passed to `server.WithMiddlewareConfigs` as each middleware's per-server default config; a router.yaml entry carrying its own block still wins (handler over group over server). Server-level middlewares (`WithMiddlewares`) are activated by the same mapping — an entry enables (`cors: true`, `cors:`, or a policy block), no entry leaves one dormant, and booleans anywhere in the mapping are switches, not config, arriving as `Func`'s `enabled` argument; the lifecycle built-ins take no config and claim no names. Names in this mapping are matched exactly and a typo'd one silently configures nothing (unlike router.yaml refs, which fail registration); viper lowercases keys, so keep middleware names lowercase. YAML 1.1 truthiness applies — `cors: yes`/`on` enable it too
 - Custom service config keys are accessed in `Init(ctx)` via `confutil.FromContext(ctx).GetString("%s.key", nameutil.ConfigRoot(m.name))` — a format string, so the root follows the service's name (see [app/services.md](../app/services.md))
 - Pubsub, messagebus, plan and task manager services are configured entirely via functional options, not YAML keys
-- `tracing.*` keys (or `<name>.*` for a `WithName`d instance) are read dynamically in `tracing.Manager.Init(ctx)` — a set key wins over the constructed options and stays sticky across restarts until overridden. Per-server activation is the standard middleware mapping: `trace: true` under `api.<name>.middlewares` enables the framework's tracing middleware on that server ([tracing.md](tracing.md))
+- `tracing.*` keys (or `<name>.*` for a `WithName`d instance) are re-read in `tracing.Manager.Init(ctx)` on every restart, overriding the constructed options, an absent key landing on the default. Per-server activation is the standard middleware mapping: `trace: true` under `api.<name>.middlewares` enables the framework's tracing middleware on that server ([tracing.md](tracing.md))
 - `metrics.*` keys are re-read in `metrics.Manager.Init(ctx)` on every restart, an absent key landing on the default ([metrics.md](metrics.md))
 
 ## Environment Overrides

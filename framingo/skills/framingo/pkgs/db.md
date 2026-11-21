@@ -174,10 +174,9 @@ What framingo fixes on top of upstream:
 - **The provider stays live.** The upstream plugin resolves
   `provider.Tracer(...)` once, at construction. `otelgorm` hands it a
   delegating provider (`traceutil.LiveProvider`) that re-resolves
-  `model.Tracer.Provider()` on every span,
-  so a tracing-service restart takes effect without rebuilding the database
-  connection — the same "never cache the provider" rule the trace middleware
-  follows.
+  `model.Tracer.Provider()` on every span, so a tracing restart takes effect
+  without rebuilding the database connection whatever `model.Tracer` it was
+  given; the tracing service's own provider follows its restarts already.
 - **Metrics reporting is off.** The plugin's DBStats half reaches for
   `otel.GetMeterProvider()`, the global framingo never touches.
 `WithoutMetrics` is the only default `New` forces, because it is the only one

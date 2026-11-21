@@ -58,6 +58,11 @@ for msg := range ch {
 }
 ```
 
+A pubsub stop forgets every subscription and closes its channel, which ends
+the loop above. A subscriber that runs on beside a pubsub restarted alone
+subscribes again: it is a `common.Reconcilable`, and does so on
+`DependencyRunning` ([supervisor.md](supervisor.md#reconciling-with-a-dependency)).
+
 **Do not reach for `Subscribe(topic, handler)`** — there is no handler-registration form at this layer. Handler-style dispatch (`HandleMessage`/`HandleRawMessage`) lives one layer up in `messagebus`; use that if you want handlers rather than channels.
 
 Topics are hierarchical in the subscriber's favour: subscribing to `orders` receives `orders`, `orders/created`, `orders/created/eu`, etc.
@@ -115,10 +120,14 @@ wsutil.Bridge(wsConn, messenger, wsutil.WithLogger(logger))
 `Register` works before or after `Start` — modules registered earlier are
 subscribed when the bus starts, later ones at once — and a second module
 under a taken name is ignored. `Stop` unsubscribes every module and waits
-for running handlers until its context ends. Options: `WithLogger`,
+for running handlers until its context ends. A pubsub stop forgets every
+subscription; when the supervisor restarts pubsub alone, the messagebus — a
+`common.Reconcilable` — subscribes every module again
+([supervisor.md](supervisor.md#reconciling-with-a-dependency)). A
+`Messenger`'s channel closes with it, ending its `wsutil.Bridge`. Options: `WithLogger`,
 `WithName`, and `WithTopic` (default `messagebus.DefaultTopic`), which lets
 several buses share one pubsub. `messagebus.Manager` is the
-`model.MessageBus` plus `Daemon` and `Debuggable`.
+`model.MessageBus` plus `Daemon`, `Debuggable` and `Reconcilable`.
 
 `wsutil.Bridge` relays both ways as JSON: each `entity.PubsubMessage` on the
 messenger's channel is written to the socket, and each frame read that

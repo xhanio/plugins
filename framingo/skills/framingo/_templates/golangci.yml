@@ -4,13 +4,14 @@
 #   go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
 #
 # The depguard rules are the import boundaries of the layout (app/layout.md);
-# each names the design note that decides it.
+# each boundary rule names the design note that decides it.
 version: "2"
 
 linters:
   enable:
     - depguard
     - forbidigo
+    - nolintlint
   settings:
     # import boundaries: design/narrow-contracts.md and design/data-access.md
     depguard:
@@ -30,6 +31,11 @@ linters:
           deny:
             - pkg: github.com/yourorg/myapp/pkg/services
               desc: services do not import each other, they hold types/model interfaces (design/narrow-contracts.md)
+        framework:
+          files: ["**/pkg/routers/**", "**/pkg/middlewares/**", "**/pkg/services/**", "!$test"]
+          deny:
+            - pkg: github.com/xhanio/framingo/pkg/services
+              desc: hold the framework's common.* or a types/model interface, never a framework service package; only the wiring imports them (design/narrow-contracts.md)
         orm:
           files: ["!**/pkg/services/repository/**", "!**/pkg/types/orm/**", "!$test"]
           deny:
@@ -41,6 +47,13 @@ linters:
           msg: no otel globals, pass the handle (model.Tracer, model.Meter)
         - pattern: ^fmt\.Errorf$
           msg: use github.com/xhanio/errors
+        - pattern: ^\w+\.(WatchConfig|OnConfigChange)$
+          msg: the config is re-read on SIGHUP alone (design/config.md)
+    nolintlint:
+      # an exception carries its reason (design/checks.md)
+      require-explanation: true
+      require-specific: true
+      allow-unused: false
     errcheck:
       # calls whose error nothing can act on
       exclude-functions:

@@ -2,7 +2,7 @@
 
 `pkg/services/plan` runs plans — described tasks with optional schedules —
 and reports the runs of its predefined kinds through the message bus.
-`plan.Manager` = `model.Plan` + `Daemon` + `Debuggable`.
+`plan.Manager` = `model.Plan` + `Daemon` + `Debuggable` + `Reconcilable`.
 
 ## Interfaces
 
@@ -79,7 +79,11 @@ pm := plan.New(messagebusMgr, tm,
 Register both with the supervisor like any service. It starts `tm` before the plan manager
 and stops it after; `tm.Stop(ctx)` waits for every execution it started until `ctx` ends, then
 sends what still runs `job.SignalKill` and returns. The plan manager neither starts nor stops `tm`: stopping the plan manager ends
-and forgets its own plans, and whatever else runs on `tm` carries on. Plan IDs share a
+and forgets its own plans, and whatever else runs on `tm` carries on. A
+stop of `tm` forgets every task added to it; when the supervisor restarts
+`tm` alone, the plan manager — a `common.Reconcilable` — ends canceled the
+firings the stop dropped and adds every plan's task again
+([supervisor.md](supervisor.md#reconciling-with-a-dependency)). Plan IDs share a
 namespace with the other tasks on `tm`, and a clash is the `Conflict` from `Add`.
 
 ## The task manager

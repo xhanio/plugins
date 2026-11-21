@@ -18,8 +18,8 @@ package order
 import (
 	"github.com/xhanio/framingo/pkg/types/common"
 
-	"myapp/pkg/types/model"
-	"myapp/pkg/types/repo"
+	"github.com/yourorg/myapp/pkg/types/model"
+	"github.com/yourorg/myapp/pkg/types/repo"
 )
 
 // Manager = the business contract + whichever lifecycle interfaces this

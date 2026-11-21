@@ -19,7 +19,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/xhanio/errors"
 
-	"myapp/pkg/types/api"
+	"github.com/yourorg/myapp/pkg/types/api"
 )
 
 // GetOrder handles `method: GET, path: /:id, func: GetOrder` in router.yaml.

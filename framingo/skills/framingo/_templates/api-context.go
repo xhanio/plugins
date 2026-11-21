@@ -104,7 +104,7 @@ func (c *ctx) BindForm() *echo.ValueBinder {
 }
 
 func (c *ctx) BindAny(i any) error {
-	return c.Context.Bind(i)
+	return c.Bind(i)
 }
 
 // HandlerFunc / WebSocketHandlerFunc are the recommended handler signatures
