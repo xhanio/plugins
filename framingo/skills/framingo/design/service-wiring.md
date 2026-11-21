@@ -67,7 +67,8 @@ restart swapping what is under it: the metrics service's provider outlives
 its exporter, and the tracing service's provider follows the pipeline its
 `Init` rebuilds, so a library that keeps its `Tracer` survives the restart.
 
-What a dependent registered with a dependency — a subscription, a task — is
+What a dependent registered with a dependency — a subscription, a task, a
+plan — is
 the dependent's to put back, since the dependency's state lasts no longer
 than its run: a stop forgets it. A dependent that registers is a
 `common.Reconcilable`, and when the supervisor stops or starts the

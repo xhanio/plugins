@@ -182,14 +182,17 @@ nor a `Reconcile` since has failed
   it is while a dependency is not running and returns an `Unavailable`; the
   attempt is not counted against `maxRetries`.
 - **A failed `Start` still starts the supervisor**: its monitor runs, and `Stop`
-  stops what did start. Whether the process goes on is the caller's call — the
-  example exits on a failed start at boot, and on a SIGHUP reload starts what it
-  can after a failed `Init`, as at boot, as the supervisor's own `Restart` does.
+  stops what did start. Whether the process goes on is the caller's call. The
+  example waits at `Init` at boot until every service inits, and exits on a
+  failed `Start`; a SIGHUP reload, in a process already serving, starts
+  what it can after a failed `Init`, as the supervisor's own `Restart` does,
+  the error logged and in `/readyz`.
 
 ## Reconciling with a dependency
 
 A dependency's state lasts no longer than its run: the task manager forgets
-the tasks added to it when it stops, pubsub its subscriptions. A dependent
+the tasks added to it when it stops, the plan manager its plans, pubsub its
+subscriptions. A dependent
 that registers with a dependency implements `common.Reconcilable`, and puts
 back what it holds when told
 ([design/service-wiring.md](../design/service-wiring.md#a-restart-is-invisible-to-the-dependents)):
@@ -249,11 +252,13 @@ service's `Init`; dependents only observe. A dependency that exhausted a
 bounded policy is permanent, and dependents fail fast with "dependencies
 not ready" instead of burning their own budget.
 
-For bootstrap-style dependencies prefer `WithInitPolicy(-1)`: during init
-there is no traffic to protect, and giving up after k tries just moves
-the retry to the platform as a crash loop. The bound still exists twice —
-the `Init` context (your signal handler cancels it, and cancellation cuts
-a wait short mid-delay) and the platform's own startup timeout.
+For a dependency the app cannot run without, prefer `WithInitPolicy(-1)`
+with a long `maxDelay`: during init there is no traffic to protect, giving
+up after k tries only moves the retry to the platform as a crash loop, and
+each blocked try is logged with its error, a wrong password included. The
+example waits as long as it takes, `WithInitPolicy(-1, time.Second,
+5*time.Minute)`, one try in five minutes at the slowest. The `Init` context
+bounds the wait: cancellation cuts it short mid-delay.
 
 ## Health Probes & Escalation
 

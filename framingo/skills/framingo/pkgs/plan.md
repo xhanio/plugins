@@ -80,6 +80,9 @@ Register both with the supervisor like any service. It starts `tm` before the pl
 and stops it after; `tm.Stop(ctx)` waits for every execution it started until `ctx` ends, then
 sends what still runs `job.SignalKill` and returns. The plan manager neither starts nor stops `tm`: stopping the plan manager ends
 and forgets its own plans, and whatever else runs on `tm` carries on. A
+service that adds plans is a `common.Reconcilable`, and adds them again on
+`DependencyRunning`: the supervisor restarting the plan manager alone tells it
+so. A
 stop of `tm` forgets every task added to it; when the supervisor restarts
 `tm` alone, the plan manager — a `common.Reconcilable` — ends canceled the
 firings the stop dropped and adds every plan's task again

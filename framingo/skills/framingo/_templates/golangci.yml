@@ -47,7 +47,8 @@ linters:
           msg: no otel globals, pass the handle (model.Tracer, model.Meter)
         - pattern: ^fmt\.Errorf$
           msg: use github.com/xhanio/errors
-        - pattern: ^\w+\.(WatchConfig|OnConfigChange)$
+        # any selector chain: viper.WatchConfig, v.WatchConfig, m.config.WatchConfig
+        - pattern: (^|\.)(WatchConfig|OnConfigChange)$
           msg: the config is re-read on SIGHUP alone (design/config.md)
     nolintlint:
       # an exception carries its reason (design/checks.md)

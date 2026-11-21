@@ -137,9 +137,9 @@ func (m *manager) reload(ctx context.Context) error {
 	if err := m.config.ReadInConfig(); err != nil {
 		m.log.Errorf("failed to re-read config file %s, starting on the config already read: %s", configFile, err)
 	}
-	// a failed Init still starts what it can, as at boot: the supervisor
-	// starts no service whose Init or dependencies failed, and the monitor
-	// restarts those
+	// unlike the boot, a failed Init starts what it can: the process is
+	// serving, the error is logged and in /readyz, and the supervisor starts
+	// no service whose Init or dependencies failed, for the monitor to restart
 	initErr := m.services.Init(ctx)
 	return errors.Wrap(errors.Combine(initErr, m.services.Start(ctx)))
 }
@@ -191,6 +191,10 @@ func (m *manager) initServices() error {
 	// services see the viper only as the read-side Config the supervisor carries into Init
 	m.services = supervisor.New(confutil.New(m.config),
 		supervisor.WithLogger(m.log),
+		// what does not come up is waited for, for as long as it takes: the
+		// wait doubles from 1s to one try in 5m, each blocked try logged with
+		// its error; a service must not start without its dependencies
+		supervisor.WithInitPolicy(-1, time.Second, 5*time.Minute),
 		// a Start that takes seconds is stuck: failing it here records why,
 		// within the liveness probe's budget for Init and every Start
 		supervisor.WithStartPolicy(10*time.Second),
@@ -388,12 +392,11 @@ func (m *manager) Init(ctx context.Context) error {
 		m.messagebus.Register(svc)
 	}
 
-	// init all services — a failure is logged, not fatal, so the listeners
-	// still come up and /readyz reports what failed; from then on the
-	// monitor (supervisor.monitor.*) keeps the probes current and restarts
-	// a service whose liveness fails
+	// the supervisor waits at Init until every service inits (WithInitPolicy);
+	// an Init it gives up on, the boot canceled, ends the boot. A reload starts
+	// what it can instead (config.go)
 	if err := m.services.Init(ctx); err != nil {
-		m.log.Error(err)
+		return errors.Wrap(err)
 	}
 
 	// wire routes after services are initialized
@@ -446,7 +449,7 @@ than the platform's own stop timeout, so the shutdown ends there rather than in 
 the example's 20s sits inside Kubernetes' default 30s termination grace period. Give it a
 `WithStartPolicy` too: a `Start` only binds a listener or launches a loop, the slow work being
 `Init`'s, so one that takes seconds is stuck. The example's 10s fails it: the daemon exits
-with that start error, as on any failed start at boot, long before the liveness probe — whose
+with that start error, as on any failed `Start` at boot, long before the liveness probe — whose
 listener starts last, after every `Start` — would give up on the pod.
 
 ## `api.go` — Middleware and Router Registration
