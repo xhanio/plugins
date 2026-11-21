@@ -39,6 +39,13 @@ the platform is infrastructure - but an optional source the app did not
 wire is, and the supervisor skips a nil entry everywhere it walks
 `Dependencies` — registering, the init gate, the health monitor.
 
+The meter is the one handle held and not listed. A dependency gates `Init`
+and rolls its health up, and telemetry never gates a service: recording
+works whatever the collector does, before the metrics service starts as
+after. Being always there and being depended on are two things. The
+`depslist` analyzer holds the rule, and the meter's field carries
+`//framingo:ignore depslist` with that reason ([checks.md](checks.md)).
+
 **Why.** A filter in every `Dependencies()` (type assertions, `if x != nil`)
 was boilerplate that could be forgotten. Listing an optional source also
 orders it: a wired LDAP source is initialized and started before auth,

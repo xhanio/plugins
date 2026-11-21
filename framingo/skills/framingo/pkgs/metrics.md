@@ -148,10 +148,13 @@ through the app's `model.Platform` bundle, build their instruments once in `Init
 (where failure is a first-boot error — an invalid instrument name is a
 deterministic programmer mistake, not a runtime condition), cache them in
 an `instruments` struct, and record with the service name as the
-instrumentation scope. The meter is optional: given none, a service mints
-noop instruments and records into them, so its business path never
-nil-checks — the same stance as the api server, whose metrics built-in
-records into noop instruments when a listener has no meter. The full pattern
+instrumentation scope. The meter is always there — a platform handle is
+never nil, and an app that wants no metrics wires the metrics service
+disabled — so the business path never nil-checks; and it is never listed in
+`Dependencies`, since telemetry must not gate a service
+([design/service-wiring.md](../design/service-wiring.md)). The api server
+differs only in taking its meter by option: a listener given none records
+into noop instruments. The full pattern
 with code is in
 [../app/services.md](../app/services.md) "Service metrics".
 

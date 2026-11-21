@@ -123,7 +123,8 @@ type manager struct {
 
 	repository Repository
 	mb         common.RawMessageSender
-	meter      fmodel.Meter
+	//framingo:ignore depslist telemetry never gates a service: recording works whatever the collector does
+	meter fmodel.Meter
 
 	mu       sync.RWMutex // guards greeting: Init rewrites it, a restart again
 	greeting string       // dynamic config

@@ -7,8 +7,9 @@ the cheapest means that can, and the check's message names the design note it
 enforces. What cannot be — "the repository decides nothing" — stays with
 review, and is said to. The first means is a golangci-lint config: the
 repository's own `.golangci.yml`, and `_templates/golangci.yml` for an app
-built on the layout. What is not Go source takes a test: `router.yaml`
-against its handlers.
+built on the layout. What needs types takes an analyzer, in
+`pkg/tools/vet/<rule>`, run by `framingo vet` through `go vet`. What is not
+Go source takes a test: `router.yaml` against its handlers.
 
 | Check | Holds | Decided in |
 |---|---|---|
@@ -18,6 +19,8 @@ against its handlers.
 | depguard `errors`, forbidigo `fmt.Errorf` | errors come from `xhanio/errors`, which categorizes and wraps | — |
 | forbidigo `otel.Get*`/`Set*` | no otel globals: a handle is passed | — |
 | errcheck | a file's own `Close` is checked: a write the OS deferred fails there | — |
+| `framingo vet`: `startctx` | a `Start` keeps neither its ctx nor one derived from it — in a field, or in a goroutine it starts — unless cut with `context.WithoutCancel` | [lifecycle.md](lifecycle.md) |
+| `framingo vet`: `depslist` | a field holding a service is listed in the type's `Dependencies` | [service-wiring.md](service-wiring.md) |
 | `server.CheckRouter`, in each router's test | every `func:` in `router.yaml` is a discovered handler whose signature fits its method; no route twice | [who-decides.md](who-decides.md) |
 | the example's `apitest.CheckRouter` | a declared `permission:` is one `rbac` defines | [who-decides.md](who-decides.md) |
 
@@ -34,9 +37,22 @@ whoever trips a rule why it is there, not only that it is.
 path into the template; and a rule keyed on the layout's directories checks
 only code laid out that way.
 
+## An exception carries its reason
+
+**Decision.** A line opts out of one analyzer with
+`//framingo:ignore <rule> <reason>`, on the reported line or the one above;
+without a reason it is not honoured. As with `//nolint`, the reason is the
+point.
+
+**Why.** A rule with no way out gets weakened until it fits its hardest
+case. The exceptions that exist say what the rule does not: a messenger
+holds the bus but is a handle given to one connection, never supervised; a
+service holds the meter, which never gates it.
+
 ## One command gives the verdict
 
-**Decision.** `framingo verify` formats, builds, vets, lints and tests each
+**Decision.** `framingo verify` formats, builds, vets — `go vet` and
+`framingo vet` — lints and tests each
 module it is given, runs every step even after one fails, and ends with
 `verified` or the list of what failed, exiting non-zero. The skill tells an
 agent to run it after any change. The command is the framework module's own
@@ -55,6 +71,6 @@ the same results without it.
 
 ## Not yet
 
-What needs types rather than import paths — `Start` keeping its context,
-`Dependencies` missing a held service, a `*gorm.DB` kept in a field — and
-the docs' snippets against the code. The repository's `ROADMAP.md` plans both.
+More analyzers — the platform first in every constructor, a `*gorm.DB` kept
+in a field, config read outside `Init` — and the docs' snippets against the
+code. The repository's `ROADMAP.md` plans both.
