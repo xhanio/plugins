@@ -46,7 +46,8 @@ them.
 project-owned `api.Context` + `DiscoverHandlers`, the canonical
 `router.go`/`handler.go`/`router.yaml` triple, and the two halves of a service
 interface (the project's `types/model` contract and the service's own
-`Manager`). They are copied into a new project rather than read: the skill's
+`Manager`), and the golangci-lint config that keeps the layout's import
+boundaries. They are copied into a new project rather than read: the skill's
 handler pattern depends on `api.Context` existing, and hand-reconstructing it
 from prose yields a subtly different type that every handler then inherits.
 The directory is underscore-prefixed so the Go toolchain ignores it — the Go

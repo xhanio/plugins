@@ -134,12 +134,12 @@ type manager struct {
 	inst *instruments // built once at Init
 }
 
-func New(platform platform.Platform, repo Repository, opts ...Option) Manager {
+func New(platform model.Platform, repo Repository, opts ...Option) Manager {
 	return newManager(platform, repo, opts...)
 }
 
 // newManager returns the concrete manager, the form package tests construct.
-func newManager(platform platform.Platform, repo Repository, opts ...Option) *manager {
+func newManager(platform model.Platform, repo Repository, opts ...Option) *manager {
 	m := &manager{
 		repository: repo,
 		mb:         platform.MessageBus(),
@@ -202,9 +202,11 @@ nothing out ([design/service-wiring.md](../design/service-wiring.md)).
 Skipping covers ordering only: the service checks an optional dependency
 where it calls it.
 
-**The platform bundle.** The app bundles its framework plumbing in
-`services/system/platform`; a service imports it and takes
-`platform.Platform` as is — no per-consumer slice of it. The bundle rides
+**The platform bundle.** The app bundles its framework plumbing behind
+`model.Platform`, a `types/model` contract; a service takes it as is — no
+per-consumer slice of it — and imports no service package to do so:
+`services/system/platform` only builds the bundle, for the wiring and for
+tests. The bundle rides
 first in every app service's constructor — `New(platform, repo, ...)` for
 the system and business services, `New(platform, um, lm, tm, ...)` for
 auth, `New(platform, ...)` for the repository, which reads `DB()` from it —

@@ -1,11 +1,11 @@
 ---
 name: framingo
 description: Use when working with Framingo (`github.com/xhanio/framingo`) Go code — bootstrapping a new framingo backend project, creating services, registering with the supervisor, configuring HTTP servers/routers, the database service, pub/sub messaging, or implementing service lifecycle interfaces. Triggers on mentions of framingo, "new Go backend", service lifecycle, supervisor, handler groups, or any framingo package imports.
-compatibility: Requires Go 1.25+. Documents github.com/xhanio/framingo v0.9.1 — where the repo's go.mod pins a different framingo version, trust the code over this prose.
+compatibility: Requires Go 1.25+. Documents github.com/xhanio/framingo v0.9.2 — where the repo's go.mod pins a different framingo version, trust the code over this prose.
 metadata:
   author: xhanio
-  version: "1.8.0" # mirrors plugin.json; bump both together
-  framingo: v0.9.1 # the framework version these docs describe
+  version: "1.9.0" # mirrors plugin.json; bump both together
+  framingo: v0.9.2 # the framework version these docs describe
 ---
 
 # Framingo - Service-Oriented Go Framework
@@ -77,6 +77,7 @@ One file per concept, in two halves — `pkgs/` is how to **use framingo's packa
 | [design/config.md](design/config.md) | Config read in `Init` from the context, a restart as the reload; a reload published whole; the file re-read on SIGHUP alone |
 | [design/websockets.md](design/websockets.md) | `wsutil.Bridge`, `wsutil.Close`, the server closing its connections on stop |
 | [design/certificates.md](design/certificates.md) | CSRs keep the requester's key; a server CA and an agent CA; CA keys in the database alone; downloads encoded as the caller asks; TLS verifies each side against the CAs it is given |
+| [design/checks.md](design/checks.md) | Which decisions a machine checks, and by what: the lint config's import boundaries and forbidden calls |
 | [design/migrations.md](design/migrations.md) | Migrate on start locally, once per release in prod (`exampleapp migrate`), env-overridable config |
 
 ## Starting a New Backend
@@ -122,6 +123,11 @@ cp <skill>/_templates/{router.go,handler.go,router.yaml} pkg/routers/order/
 # The service's two interface halves (see app/services.md)
 cp <skill>/_templates/types-model-order.go    pkg/types/model/order.go
 cp <skill>/_templates/services-order-model.go pkg/services/order/model.go
+
+# The lint config that keeps the layout's import boundaries, and the
+# command that verifies a change (see "Verifying a Change" below)
+cp <skill>/_templates/golangci.yml .golangci.yml
+go install github.com/xhanio/framingo@latest
 ```
 
 All five `types/` subdirs are part of the layout ([app/layout.md](app/layout.md)); `model/` in particular is **not optional** — the router template imports `myapp/pkg/types/model`.
@@ -131,6 +137,27 @@ All five `types/` subdirs are part of the layout ([app/layout.md](app/layout.md)
 Then: write services ([app/services.md](app/services.md)), wire them in `pkg/components/server/` ([app/components-server.md](app/components-server.md)), and register routers with the API server ([app/routers.md](app/routers.md), [pkgs/api.md](pkgs/api.md)).
 
 Either route, the reference map above is the per-concept guide for the work inside the new project.
+
+## Verifying a Change
+
+After any change, before calling it done, run the one command that checks
+everything a machine can check:
+
+```bash
+framingo verify            # in an app; in the framingo repo: framingo verify . example
+```
+
+Install it once, at the framework version the project uses:
+`go install github.com/xhanio/framingo@latest`. It needs golangci-lint v2 on
+the PATH, built with the Go that builds the code
+(`go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest`).
+
+It formats, builds, vets, lints and tests (with `-race`) each module, runs
+every step even after one fails, and ends with `verified` or the list of
+what failed, exiting non-zero. A lint failure names the design note it
+enforces — `(design/narrow-contracts.md)` — so read that note before
+changing the code or reaching for `//nolint`; a `//nolint` carries its
+reason. What each check holds: [design/checks.md](design/checks.md).
 
 ## Quick Reference
 
@@ -244,4 +271,4 @@ For the full category rules, type-separation example, server component file stru
 10. **Layered Access** - the api level (routers, middlewares) calls services only; services persist through the repo level only; only `services/repository/` touches the database
 11. **Types First** - for a new feature, design `types/*` (api → entity/model → orm/repo) before implementing the router, service, or repo
 12. **Probe Split** - `Alive(ctx)` fails only if a restart would fix it; `Ready(ctx)` means "can it serve right now"; a dependency outage fails readiness, never liveness
-13. **Platform First** - every app service's constructor takes `platform.Platform` first (`New(platform, ...)`), whether it uses it yet or not; framework services excepted ([app/services.md](app/services.md))
+13. **Platform First** - every app service's constructor takes `model.Platform` first (`New(platform, ...)`), whether it uses it yet or not; framework services excepted ([app/services.md](app/services.md))

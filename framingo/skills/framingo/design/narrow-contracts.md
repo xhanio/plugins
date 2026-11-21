@@ -11,6 +11,11 @@ serves the one holding it.
 - **Peers by `model.*`, collaborators by `common.*`.** The example service
   takes `common.RawMessageSender`, not `messagebus.Manager`; the auth service
   takes `model.UserAuthN`, not the user service.
+- **No service package is imported for its type.** A router, a middleware
+  and a service each hold a `types/model` interface — `model.Role` in
+  `authz`, `model.Platform` first in every service — so only the wiring, and
+  a test building the real thing, imports `pkg/services/...`. The lint
+  config's depguard rules hold this ([checks.md](checks.md)).
 - **Message handlers are `Named`, not `Service`.** `common.MessageHandler`
   and `RawMessageHandler` embed `common.Named`: the bus registers the
   handler itself and keys its subscription on the name, which is all it

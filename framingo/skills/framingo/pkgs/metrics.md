@@ -144,7 +144,7 @@ metrics:
 ## Instruments in App Code
 
 Business services never import this package: they consume `model.Meter`
-through the app's `platform.Platform` bundle, build their instruments once in `Init`
+through the app's `model.Platform` bundle, build their instruments once in `Init`
 (where failure is a first-boot error — an invalid instrument name is a
 deterministic programmer mistake, not a runtime condition), cache them in
 an `instruments` struct, and record with the service name as the

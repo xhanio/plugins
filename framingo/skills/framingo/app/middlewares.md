@@ -103,10 +103,10 @@ its constructor and declares them, exactly like a router —
 // middlewares/authz/middleware.go
 type middleware struct {
 	name string
-	role role.Manager
+	role model.Role
 }
 
-func New(role role.Manager, opts ...Option) fapi.Middleware {
+func New(role model.Role, opts ...Option) fapi.Middleware {
 	m := &middleware{
 		role: role,
 	}
@@ -122,7 +122,8 @@ func (m *middleware) Dependencies() []common.Service {
 
 Middlewares sit at the api level beside routers, and the same layer rule
 applies ([layout.md](layout.md)): they may call services — as `authz` calls
-the role service — but never the repo level, `types/orm/`, or `db`.
+the role service, through its `types/model` interface, never importing the
+service package — but never the repo level, `types/orm/`, or `db`.
 
 ## Config-Free Middleware
 

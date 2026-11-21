@@ -310,7 +310,10 @@ method, a `func:` with no handler of a matching signature (handler
 discovery skips a mismatched signature silently, so this is where it
 surfaces) or a route declared twice fails `RegisterRouters` with an error
 naming the router and the handler group — and the wiring returns it, so
-startup fails on it.
+startup fails on it. `server.CheckRouter(router) ([]Route, error)` runs the
+same checks with no server and returns the routes declared (server, prefix,
+method, path, func, permission): call it from the router's test, and what
+would fail startup fails there ([routers.md](../app/routers.md)).
 
 ## Handler Key Format
 

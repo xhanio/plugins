@@ -11,7 +11,7 @@ list grows with the app: the example adds three more.
 |---|---|---|---|
 | `types/api/` | api | Wire types: request/response DTOs, middleware config blocks (`ThrottleConfig`, `CORSConfig` in `middleware.go`), plus `Context` + `DiscoverHandlers` in `api.go` | Routers, middlewares, clients |
 | `types/entity/` | service | Domain entities (business data, no ORM tags) — what services hand upward | Services; routers serialize them as responses |
-| `types/model/` | service | Service business interfaces (`model.Example` — methods + `common.Service`, no lifecycle) | Routers and other services — see [services.md](services.md) |
+| `types/model/` | service | Service business interfaces (`model.Example` — methods + `common.Service`, no lifecycle), and `model.Platform`, the plumbing bundle every service takes | Routers and other services — see [services.md](services.md) |
 | `types/orm/` | repo | DB models (gorm tags, a `TableName()`); a table that fits the framework's `orm.Record` embeds `BaseModel` and says so with `var _ form.Record[int32] = X{}` (`form` = the framework's `pkg/types/orm`), one that doesn't (`HelloWorld`) simply doesn't ([types.md](../pkgs/types.md)) | `services/repository/` only, [db.md](../pkgs/db.md) |
 | `types/repo/` | repo | Repository interfaces, one file per domain — all implemented by `services/repository/`, each embedding `repo.Repository` (`common.Service` + `Transaction`) — plus inputs only the repository takes (`repo.UserCreateOptions`, which carries the password hash, not the password) | Services, through the `Repository` interface each declares in its `model.go`; a service opens a transaction through a contract it holds |
 

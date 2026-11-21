@@ -267,11 +267,22 @@ forces `echo.HandlerFunc` signatures, defeating `api.Context`, and rots on
 rename. Keep the debug line: methods that don't match a known signature are
 skipped **silently** — a `func:` naming one fails registration with
 `handler function <Name> not found in router.Handlers()`, at startup. Each
-example router pins the yaml↔handler mapping before that, in a
-`router_test.go` (`TestHandlersCoverConfig`) built on `newRouter` with nil
-services: every `func:` in the embedded `router.yaml` must resolve to a
-discovered handler. A multi-group router decodes the file document by
-document and asserts the group count too (`routers/user/router_test.go`).
+example router catches that before startup, in a one-line `router_test.go`
+built on `newRouter` with nil services:
+
+```go
+func TestRouter(t *testing.T) {
+	apitest.CheckRouter(t, newRouter(nil, log.Default))
+}
+```
+
+The framework's `server.CheckRouter(router)` runs the registration checks
+with no server — every `func:` resolves to a discovered handler whose
+signature fits its method, no route is declared twice — and returns the
+routes declared. The example's `apitest.CheckRouter` wraps it for a test and
+adds the app's own rule: a `permission:` is one `rbac` defines, since a
+misspelled one would lock out every role but admin. A multi-group router
+asserts its groups from the routes returned (`routers/user/router_test.go`).
 
 ## Wiring routers into the server
 

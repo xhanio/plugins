@@ -3,9 +3,12 @@
 ## The platform comes first
 
 **Decision.** Every example service's `New` takes the platform first —
-`New(platform platform.Platform, ...)` — whether it uses it or not
-(`_ platform.Platform` in `newManager` then). The platform bundles the
+`New(platform model.Platform, ...)` — whether it uses it or not
+(`_ model.Platform` in `newManager` then). The platform bundles the
 framework plumbing a service may reach: database, meter, pubsub, messagebus.
+`Platform` is a `types/model` contract like any other a service consumes;
+`services/system/platform` only builds one, for the wiring and for tests, so
+no service imports a service package, the platform's included.
 
 **Why.** One shape for every constructor; a service that later needs the
 meter or the bus takes it from what it already holds, and no call site

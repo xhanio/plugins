@@ -67,7 +67,7 @@ Reach for `foo_test` only when the compiler makes you. Nothing else in framingo 
 
 ## Naming the file
 
-Mirror the source file: `health.go` → `health_test.go`, `migrate.go` → `migrate_test.go`, `middleware.go` → `middleware_test.go` (every example middleware), `router.go` → `router_test.go` (every example router's `TestHandlersCoverConfig`). A test file whose name matches no source is renamed after the one it tests — db's `config_test.go` is `lifecycle_test.go`, api/server's `metrics_test.go` is `metric_test.go`.
+Mirror the source file: `health.go` → `health_test.go`, `migrate.go` → `migrate_test.go`, `middleware.go` → `middleware_test.go` (every example middleware), `router.go` → `router_test.go` (every example router's `TestRouter`, one call to `apitest.CheckRouter`). A test file whose name matches no source is renamed after the one it tests — db's `config_test.go` is `lifecycle_test.go`, api/server's `metrics_test.go` is `metric_test.go`.
 
 When a feature spans several source files and none owns it, name the file after the **feature** instead:
 

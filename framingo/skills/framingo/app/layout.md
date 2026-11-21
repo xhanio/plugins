@@ -68,7 +68,7 @@ pkg/
 ├── services/
 │   ├── repository/              # data access — implements every types/repo interface
 │   ├── system/                  #   auth/ certificate/ organization/ role/ user/, and
-│   │                            #   platform/ (the plumbing bundle, not a service)
+│   │                            #   platform/ (builds the model.Platform bundle, not a service)
 │   └── example/                 # business tier
 ├── routers/                     # auth/ certificate/ example/ health/ messagebus/ role/ user/
 │   └── example/                 #   router.go, router.yaml, handler.go, router_test.go
@@ -78,6 +78,7 @@ pkg/
 │   ├── api/ entity/ model/ orm/ repo/    # the five core categories
 │   └── message/ preset/ rbac/            # grown as the app needed them
 └── utils/
+    ├── apitest/                 # test helpers for routers: CheckRouter
     └── infra/                   # process-wide state: Debug, StartTime, SerialNumber, ConfigDir, EnvPrefix
 ```
 
@@ -95,7 +96,7 @@ still applies to them.
 | `components/client/` | Go client SDK exposing typed methods over HTTP | Consumed by `components/cmd/cli/` and external callers; depends on `types/api/` + `types/entity/`, never on services |
 | `services/` | Business logic, in tiers: `repository/` (data access) → `system/` → business (`example/`) | Each service declares dependencies via `Dependencies()` and never imports a sibling service package — it takes the peer's `types/model/` interface, and its own `Repository` (the `types/repo/` contracts it uses, in its `model.go`) for data |
 | `routers/` | HTTP handlers — each router owns a `router.yaml` + `Handlers()` returning `api.DiscoverHandlers(r)` | Split per package into `router.go` (wiring) + `handler.go` (bodies taking the project `api.Context`); business logic delegates to services ([routers.md](routers.md)) |
-| `middlewares/` | `fapi.Middleware` implementations, one package each | May depend on services (constructor + `Dependencies()`, like a router) — `authz` takes `role.Manager` ([middlewares.md](middlewares.md)) |
+| `middlewares/` | `fapi.Middleware` implementations, one package each | May depend on services (constructor + `Dependencies()`, like a router) — `authz` takes `model.Role`, never the service package ([middlewares.md](middlewares.md)) |
 | `types/api/` | Request/response DTOs, middleware config blocks, the project `api.Context` | Tags: `json`, `form`, `query`, `validate`. NO gorm tags |
 | `types/entity/` | Pure business domain models | Tags: `json` only. Returned from services to callers |
 | `types/model/` | Service **business** interfaces (`example.go` declares `model.Example`) | Imported by routers and other services so implementations stay package-private. Pairs with the service's own `Manager` — see below |

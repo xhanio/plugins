@@ -1,0 +1,66 @@
+# COPY THIS FILE to .golangci.yml at the project root, and replace
+# github.com/yourorg/myapp with your module path. golangci-lint v2: install it
+# with the Go you build with, or it cannot read the compiler's export data:
+#   go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
+#
+# The depguard rules are the import boundaries of the layout (app/layout.md);
+# each names the design note that decides it.
+version: "2"
+
+linters:
+  enable:
+    - depguard
+    - forbidigo
+  settings:
+    # import boundaries: design/narrow-contracts.md and design/data-access.md
+    depguard:
+      rules:
+        errors:
+          files: ["!$test"]
+          deny:
+            - pkg: errors
+              desc: use github.com/xhanio/errors, which categorizes and wraps
+        routers:
+          files: ["**/pkg/routers/**", "**/pkg/middlewares/**", "!$test"]
+          deny:
+            - pkg: github.com/yourorg/myapp/pkg/services
+              desc: a router or middleware holds a types/model interface, never a service package (design/narrow-contracts.md)
+        services:
+          files: ["**/pkg/services/**", "!$test"]
+          deny:
+            - pkg: github.com/yourorg/myapp/pkg/services
+              desc: services do not import each other, they hold types/model interfaces (design/narrow-contracts.md)
+        orm:
+          files: ["!**/pkg/services/repository/**", "!**/pkg/types/orm/**", "!$test"]
+          deny:
+            - pkg: github.com/yourorg/myapp/pkg/types/orm
+              desc: orm types never leave the repository (design/data-access.md)
+    forbidigo:
+      forbid:
+        - pattern: ^otel\.(Get|Set)\w+$
+          msg: no otel globals, pass the handle (model.Tracer, model.Meter)
+        - pattern: ^fmt\.Errorf$
+          msg: use github.com/xhanio/errors
+    errcheck:
+      # calls whose error nothing can act on
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - (io.Closer).Close # through an interface: a response body, an upload; a file's own Close is still checked
+        - (*text/tabwriter.Writer).Flush
+  exclusions:
+    rules:
+      # a test's cleanup
+      - path: _test\.go
+        linters: [errcheck]
+        text: Close
+      # a test's stub errors
+      - path: _test\.go
+        linters: [forbidigo]
+        text: fmt\.Errorf
+
+issues:
+  # report everything: the defaults stop at 50 per linter and 3 of a kind
+  max-issues-per-linter: 0
+  max-same-issues: 0

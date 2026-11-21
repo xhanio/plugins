@@ -52,7 +52,7 @@ type manager struct {
 	pubsub     pubsub.Manager
 	messagebus messagebus.Manager
 	// platform bundle for business constructors
-	platform platform.Platform
+	platform model.Platform
 	// data access
 	repository repository.Repository
 
@@ -313,8 +313,8 @@ Four details that matter:
   services take their own `Repository` interface — the `repo.*` contracts
   they use, declared in their `model.go` — never `db.Manager`: only the
   repository touches the database.
-- **The platform bundle (`services/system/platform`) is a combiner, not a
-  builder.** It holds the `model.*` handles business constructors consume —
+- **The platform bundle (`model.Platform`, built by
+  `services/system/platform`) is a combiner, not a builder.** It holds the `model.*` handles business constructors consume —
   `DB() model.Database`, `Meter() model.Meter`, `PubSub() model.Pubsub`,
   `MessageBus() model.MessageBus` — so a new cross-cutting handle later
   means one new getter, not a parameter added to every constructor. The
@@ -322,8 +322,8 @@ Four details that matter:
   and registers them individually. Tracing stays out of the bundle: no
   business service touches the tracer — spans arrive through the trace
   middleware and propagate via context. The repository stays out too: it is
-  a business dependency, passed explicitly. Consumers import the bundle and
-  take `platform.Platform` as is — see [services.md](services.md).
+  a business dependency, passed explicitly. Consumers take `model.Platform`
+  as is, importing only `types/model` — see [services.md](services.md).
 - **Combine the bundle to fit the app — never wire a nil into it.** The
   bundle lives in the app tree precisely so its shape tracks what *this*
   app constructs: an app without pubsub drops the `PubSub()` getter; it
