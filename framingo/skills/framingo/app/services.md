@@ -12,7 +12,7 @@ reference implementation — every snippet below is lifted from it.
 services/example/
 ├── model.go     # Manager (model.Example + lifecycle) and Repository (its repo.* contracts)
 ├── manager.go   # unexported struct, New()/newManager(), Name(), Dependencies()
-├── option.go    # Option, applyOptions(), setDefaults(), WithLogger, With<Dynamic>…
+├── option.go    # Option, applyOptions(), setDefaults(), settings + resolve(), the construction and reloadable options
 ├── business.go  # the business methods — model.Example's contract
 ├── lifecycle.go # Init/Start/Stop/Info
 └── metric.go    # the instruments struct, built in Init (when the service records metrics)
@@ -127,8 +127,9 @@ type manager struct {
 	//framingo:ignore depslist telemetry never gates a service: recording works whatever the collector does
 	meter fmodel.Meter
 
-	mu       sync.RWMutex // guards greeting: Init rewrites it, a restart again
-	greeting string       // dynamic config
+	defaults settings     // the built-in defaults as the options set them, fixed at New
+	mu       sync.RWMutex // guards settings: each Init publishes them whole
+	settings settings
 
 	loop syncutil.Loop      // takes new work: Stop waits for it, no deadline
 	wg   syncutil.WaitGroup // work the loop hands off, from any Start: Stop waits until its ctx ends
@@ -149,6 +150,7 @@ func newManager(platform model.Platform, repo Repository, opts ...Option) *manag
 	}
 	m.applyOptions(opts...)
 	m.setDefaults()
+	m.settings = m.defaults // what holds until the first Init
 	m.log = m.log.By(m)
 	return m
 }
@@ -246,8 +248,23 @@ until someone misses the metric in production.
 
 ## `option.go`
 
+Every setting is of one class or the other, and `option.go` puts each option
+under its class's comment — `framingo vet` reports one under neither
+([design/config.md](../design/config.md#a-setting-is-constructed-or-reloadable-and-its-optiongo-says-which)):
+
+- **Construction options** set what is fixed for the instance's life — its
+  name, its logger, the database it talks to. `setDefaults` fills what they
+  leave unset, once, at `New`, and `Init` never touches them.
+- **Reloadable options** set the *default* of a key `Init` re-reads at every
+  start. The defaults live in `m.defaults`, fixed at `New`; `resolve` turns
+  them and the config into the start's `m.settings`, the config winning
+  where it sets a key (`config.GetStringOr(s.greeting, "%s.greeting", root)`),
+  so a key dropped at a reload falls back to the default.
+
 <!-- source: example/pkg/services/example/option.go -->
 ```go
+const defaultGreeting = "hello world!"
+
 type Option func(*manager)
 
 func (m *manager) applyOptions(opts ...Option) {
@@ -256,8 +273,9 @@ func (m *manager) applyOptions(opts ...Option) {
 	}
 }
 
-// setDefaults fills every field the options left zero. It runs after
-// applyOptions, so a zero field means the caller said nothing.
+// setDefaults fills every field the options left zero, the construction ones and the
+// defaults of the reloadable ones. It runs after applyOptions, so a zero field means
+// the caller said nothing.
 func (m *manager) setDefaults() {
 	if m.log == nil {
 		m.log = log.Default
@@ -265,7 +283,28 @@ func (m *manager) setDefaults() {
 	if m.name == "" {
 		m.name = nameutil.Name(m)
 	}
+	if m.defaults.greeting == "" {
+		m.defaults.greeting = defaultGreeting
+	}
 }
+
+// settings are what Init re-reads at every start, under the service's config root.
+type settings struct {
+	greeting string
+}
+
+// resolve is the settings of a start: the defaults, each key config sets overriding
+// one, a value that is not one falling back to its default (design/config.md).
+func (m *manager) resolve(config confutil.Config) settings {
+	s := m.defaults
+	s.greeting = config.GetStringOr(s.greeting, "%s.greeting", nameutil.ConfigRoot(m.name))
+	if s.greeting == "" {
+		s.greeting = m.defaults.greeting
+	}
+	return s
+}
+
+// Construction options: fixed for the instance's life, set at New (design/config.md).
 
 // WithLogger stores the logger raw - newManager stamps it with By once the
 // name resolves, so stamping here would bake in an empty caller field.
@@ -275,18 +314,22 @@ func WithLogger(logger log.Logger) Option {
 	}
 }
 
-func WithDynamicConfig(greeting string) Option {
+// Reloadable options: each sets the default of a key Init re-reads at every start;
+// where the config sets the key, the config wins (design/config.md).
+
+// WithGreeting sets the default of example.greeting, itself "hello world!".
+func WithGreeting(greeting string) Option {
 	return func(m *manager) {
-		m.greeting = greeting
+		m.defaults.greeting = greeting
 	}
 }
 ```
 
 ## `lifecycle.go`
 
-`Init` re-reads dynamic config from the context `confutil.Config` — through the same
-`applyOptions` + `setDefaults` pair the constructor uses, so a value has one
-way in and one place that says what a zero falls back to. Keys are read
+`Init` resolves the start's settings from the defaults and the context's
+`confutil.Config`, and publishes them whole under the lock the readers take:
+a request never sees half a reload. Keys are read
 under `nameutil.ConfigRoot(m.name)`: the package segment of the auto name
 (`services/example/manager` → `example` — a name with slashes cannot be a
 root, no env override could spell it), or the whole name when `WithName`
@@ -297,15 +340,10 @@ second field. `Start` launches the run loop:
 <!-- source: example/pkg/services/example/lifecycle.go -->
 ```go
 func (m *manager) Init(ctx context.Context) error {
-	// dynamic config change, read under this service's root
-	config := confutil.FromContext(ctx)
-	root := nameutil.ConfigRoot(m.name)
-	// locked: requests read the greeting while a restart reloads it
+	s := m.resolve(confutil.FromContext(ctx))
+	// published whole: requests read the settings while a restart reloads them
 	m.mu.Lock()
-	m.applyOptions(
-		WithDynamicConfig(config.GetString("%s.greeting", root)),
-	)
-	m.setDefaults()
+	m.settings = s
 	m.mu.Unlock()
 	if m.inst == nil {
 		inst, err := m.newInstruments()
@@ -412,11 +450,8 @@ func (m *manager) HelloWorld(ctx context.Context, message string) (*entity.Hello
 		return nil, traceutil.Fail(span, errors.Unauthorized.Newf("credential not found in context"))
 	}
 	m.mu.RLock()
-	greeting := m.greeting
+	greeting := m.settings.greeting
 	m.mu.RUnlock()
-	if greeting == "" {
-		greeting = "hello world!"
-	}
 	m.log.Infof("%s %s from %s", greeting, message, credential.UserName)
 
 	result, err := m.repository.CreateHelloWorld(ctx, message)

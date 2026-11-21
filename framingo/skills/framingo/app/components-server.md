@@ -178,7 +178,7 @@ func (m *manager) newDatabase(opts ...db.Option) db.Manager {
 		}),
 		// empty dir: the daemon never touches the schema (the migrate Job does)
 		db.WithMigration(m.config.GetString("db.migration.dir"), m.config.GetUint("db.migration.version")),
-		db.WithConnection( /* the five db.connection.* keys */ ),
+		// the pool, db.connection.*, is reloadable: Init reads it at every start
 		db.WithLogger(m.log),
 	}
 	return db.New(append(base, opts...)...)
@@ -211,19 +211,13 @@ func (m *manager) initServices() error {
 
 	/* init infra level services */
 
-	// Init re-reads these keys, so a restart picks up changes
+	// tracing.* and metrics.* are reloadable: Init reads them at every start, so
+	// the wiring passes none of them; the meter's provider is stable for the life
+	// of the process, so services create their instruments once, at their first Init
 	m.tracing = tracing.New(
-		tracing.WithEnabled(m.config.GetBool("tracing.enabled")),
-		tracing.WithExporter(m.config.GetString("tracing.exporter"), m.config.GetStringMap("tracing.config")),
-		tracing.WithSampleRatio(m.config.GetFloat64("tracing.sample_ratio")),
 		tracing.WithLogger(m.log),
 	)
-	// likewise metrics.*; the meter's provider is stable for the life of the
-	// process, so services create their instruments once, at their first Init
 	m.metrics = metrics.New(
-		metrics.WithEnabled(m.config.GetBool("metrics.enabled")),
-		metrics.WithExporter(m.config.GetString("metrics.exporter"), m.config.GetStringMap("metrics.config")),
-		metrics.WithInterval(m.config.GetDuration("metrics.interval")),
 		metrics.WithLogger(m.log),
 	)
 

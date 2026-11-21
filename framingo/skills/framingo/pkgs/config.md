@@ -22,7 +22,8 @@ log:
     max_backups: 3            # number of rotated files to keep
     max_age: 7                # days to retain old log files
 
-# Database — used by db.New() options + dynamic config in db.Manager.Init().
+# Database — type/source/migration are construction keys the wiring passes to
+# db.New(); connection.* is reloadable, read by db.Manager.Init() over its defaults.
 # `db` is the instance's config root (nameutil.ConfigRoot of its name); a
 # second instance built with db.WithName("clickhouse") reads under `clickhouse:`
 db:
@@ -123,10 +124,10 @@ pprof:
 - `api.*` is iterated as a string map — each top-level key under `api` becomes a named server instance
 - TLS is enabled per-server when `api.<name>.cert` is set
 - `api.<name>.middlewares` is passed to `server.WithMiddlewareConfigs` as each middleware's per-server default config; a router.yaml entry carrying its own block still wins (handler over group over server). Server-level middlewares (`WithMiddlewares`) are activated by the same mapping — an entry enables (`cors: true`, `cors:`, or a policy block), no entry leaves one dormant, and booleans anywhere in the mapping are switches, not config, arriving as `Func`'s `enabled` argument; the lifecycle built-ins take no config and claim no names. Names in this mapping are matched exactly and a typo'd one silently configures nothing (unlike router.yaml refs, which fail registration); viper lowercases keys, so keep middleware names lowercase. YAML 1.1 truthiness applies — `cors: yes`/`on` enable it too
-- Custom service config keys are accessed in `Init(ctx)` via `confutil.FromContext(ctx).GetString("%s.key", nameutil.ConfigRoot(m.name))` — a format string, so the root follows the service's name (see [app/services.md](../app/services.md))
+- A service's reloadable keys are read in `Init(ctx)` over their defaults, `confutil.FromContext(ctx).GetStringOr(def, "%s.key", nameutil.ConfigRoot(m.name))` — a format string, so the root follows the service's name; a key the config sets wins, one it drops falls back to the default the options set ([design/config.md](../design/config.md), [app/services.md](../app/services.md))
 - Pubsub, messagebus, plan and task manager services are configured entirely via functional options, not YAML keys
-- `tracing.*` keys (or `<name>.*` for a `WithName`d instance) are re-read in `tracing.Manager.Init(ctx)` on every restart, overriding the constructed options, an absent key landing on the default. Per-server activation is the standard middleware mapping: `trace: true` under `api.<name>.middlewares` enables the framework's tracing middleware on that server ([tracing.md](tracing.md))
-- `metrics.*` keys are re-read in `metrics.Manager.Init(ctx)` on every restart, an absent key landing on the default ([metrics.md](metrics.md))
+- `tracing.*` keys (or `<name>.*` for a `WithName`d instance) are re-read in `tracing.Manager.Init(ctx)` on every restart, each over the default its option set, an absent key leaving that default. Per-server activation is the standard middleware mapping: `trace: true` under `api.<name>.middlewares` enables the framework's tracing middleware on that server ([tracing.md](tracing.md))
+- `metrics.*` keys are re-read in `metrics.Manager.Init(ctx)` on every restart, likewise over the defaults its options set ([metrics.md](metrics.md)); `db.connection.*` the same in `db.Manager.Init(ctx)`, while `db.type`, `db.source.*` and `db.migration.*` are construction, read once by the wiring, a change needing a new process ([db.md](db.md))
 
 ## Environment Overrides
 

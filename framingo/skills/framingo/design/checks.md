@@ -27,6 +27,7 @@ against the code they point at and copy (`pkg/tools/docs`).
 | `framingo vet`: `depslist` | a field holding a service is listed in the type's `Dependencies`, and the list is not filtered: no `if`, `switch` or type assertion in it | [service-wiring.md](service-wiring.md) |
 | `framingo vet`: `platformfirst` | an app service's `New` takes the platform first | [service-wiring.md](service-wiring.md) |
 | `framingo vet`: `gormfield` | no `*gorm.DB` is kept in a struct field outside the db service | [service-wiring.md](service-wiring.md) |
+| `framingo vet`: `optionclass` | every option in an `option.go` — an exported func returning an `…Option` — stands under a `// Construction options:` or `// Reloadable options:` comment | [config.md](config.md) |
 | `framingo vet`: `confinit` | `confutil.FromContext` is called in `Init` alone | [config.md](config.md) |
 | `server.CheckRouter`, in each router's test | every `func:` in `router.yaml` is a discovered handler whose signature fits its method; no route twice | [who-decides.md](who-decides.md) |
 | the example's `apitest.CheckRouter` | a declared `permission:` is one `rbac` defines | [who-decides.md](who-decides.md) |

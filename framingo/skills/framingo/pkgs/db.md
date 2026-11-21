@@ -29,9 +29,10 @@ dbMgr := db.New(
         Secure:   false,
         Params:   map[string]string{"sslmode": "disable"},
     }),
-    // maxOpen, maxIdle, maxLifetime, maxIdleTime, execTimeout; a zero is unset and
-    // takes the default (10, 5, 5m, never idle out, 30s) - but see Dynamic Config Keys
-    db.WithConnection(10, 5, 5*time.Minute, 0, 30*time.Second),
+    // the pool's defaults - maxOpen, maxIdle, maxLifetime, maxIdleTime, execTimeout,
+    // a zero leaving the built-in one (10, 5, 5m, never idle out, 30s); each Init,
+    // a db.connection.* key the config sets wins (Dynamic Config Keys)
+    db.WithConnection(20, 10, 5*time.Minute, 0, 30*time.Second),
     db.WithMigration("migrations", 0),            // directory, target version (0 = latest); "" runs none
     db.WithLogger(logger),
 )
@@ -42,13 +43,16 @@ If `WithType` names a driver that hasn't been blank-imported, `db.Manager`'s `In
 Exact option signatures — **note `Source.Port` and `WithMigration`'s version are `uint`**, so read them with `GetUint`, not `GetInt`:
 
 ```go
+// construction: fixed for the instance's life, a change needing a new process
 func WithType(dbtype string) Option
 func WithName(name string) Option                 // also the config root: "clickhouse" reads clickhouse.connection.*
 func WithDataSource(source Source) Option
 func WithMigration(sqlDir string, version uint) Option
-func WithConnection(maxOpen, maxIdle int, maxLifetime, maxIdleTime, execTimeout time.Duration) Option
 func WithPlugins(plugins ...gorm.Plugin) Option   // installed in order on every connect; repeated calls append
 func WithLogger(logger log.Logger) Option         // Debug level also turns on GORM's statement log
+
+// reloadable: the defaults of db.connection.*, which Init re-reads at every start
+func WithConnection(maxOpen, maxIdle int, maxLifetime, maxIdleTime, execTimeout time.Duration) Option
 
 type Source struct {
     Host     string
@@ -254,7 +258,7 @@ where there is genuinely no context — schema setup, tests.
 
 ## Dynamic Config Keys
 
-During `Init(ctx)`, the DB manager re-reads these from the context `confutil.Config` and **replaces whatever `WithConnection` set at construction** — so a restart picks up pool changes without a rebuild. The replacement is whole: a key the config does not set falls back to the default, not to the constructed value, so set the pool through these keys rather than `WithConnection`. They are read under the instance's config root — `db` by default, or the `WithName` name, so a second instance (`db.WithName("clickhouse")`) reads `clickhouse.connection.*`:
+During `Init(ctx)`, the DB manager resolves the pool from the defaults `WithConnection` set and these keys: a key the config sets wins, one it does not leaves the default, and a zero falls back to it (`max_idle_time` excepted: zero, never idle out, is a real choice) — so a restart picks up pool changes without a rebuild, and a key dropped at a reload returns the pool to its default ([design/config.md](../design/config.md)). They are read under the instance's config root — `db` by default, or the `WithName` name, so a second instance (`db.WithName("clickhouse")`) reads `clickhouse.connection.*`:
 - `db.connection.max_open` - max open connections
 - `db.connection.max_idle` - max idle connections
 - `db.connection.max_lifetime` - connection max lifetime

@@ -102,8 +102,8 @@ service's own data stay in that service. Why, and where the line falls:
 [design/who-decides.md#a-check-that-spans-two-services-is-the-handlers](../design/who-decides.md#a-check-that-spans-two-services-is-the-handlers).
 
 Same for WebSocket handlers: `func(c api.Context, conn *websocket.Conn) error`,
-declared `method: WS`. The messagebus router's `Stream` hands the connection
-to `wsutil.Bridge` and returns; the server closes the connection by what the
+declared `method: WS`. The messagebus router's `Stream` returns what
+`wsutil.Bridge` returned; the server closes the connection by what the
 handler returned (`wsutil.Close`), and with `StatusGoingAway` when it stops
 ([design/websockets.md](../design/websockets.md)).
 

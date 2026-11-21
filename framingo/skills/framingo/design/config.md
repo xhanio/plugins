@@ -1,21 +1,52 @@
 # Configuration: read in Init, reloaded whole
 
-## Config is read in Init, from the context
+## A setting is constructed or reloadable, and its option.go says which
 
-**Decision.** A service's constructor takes its dependencies and options;
-the configuration it can reload it reads in `Init`, from the
-`confutil.Config` the supervisor puts in `Init`'s context
-(`confutil.FromContext(ctx)`), under the root its name gives
-(`nameutil.ConfigRoot(m.name)`). What `Init` reads replaces what the options
-set, whole: a key the config leaves unset falls back to the default, not to
-the constructed value.
+**Decision.** Every setting of a service is of one class or the other:
 
-**Why.** `Init` runs at start and again on every restart, so one path serves
-both: a restart is how a changed configuration takes effect, without
-rebuilding the service. Options stay for what the wiring fixes and tests set.
+- **Construction:** fixed for the instance's life. An option sets it at
+  `New`; one the options leave unset takes the built-in default, a constant
+  on the package. `Init` never reads or writes it. The wiring may read the
+  config to choose one — `db.type`, `db.source.*`, `db.migration.*` — and a
+  change to such a key needs a new process.
+- **Reloadable:** re-read at every `Init`. Its default is the built-in one as
+  an option sets it, fixed at `New` and held on the instance (`defaults`).
+  Each `Init` resolves the settings of the start (`settings`) from the
+  defaults and the `confutil.Config` in its context, under the root the
+  service's name gives (`nameutil.ConfigRoot(m.name)`): where the config sets
+  the key it wins, where it does not the default stands, and a value that is
+  not one — an interval of zero — falls back to the default. Each reloadable
+  setting has one key; `confutil.Config`'s `Get…Or(default, key)` getters read
+  it over its default. A setting that belongs to another goes with it: an
+  exporter's config block is the config's alone where the config names the
+  exporter, never the default exporter's block, and over the default one's
+  where it does not — so a config can point the exporter the code chose at
+  another collector.
 
-**Cost.** The keys a service reads are not in its constructor's signature;
-its doc names them (`db.connection.*` in `pkgs/db.md`).
+A start is resolved from the defaults and its own config alone, never from
+the last start's settings: a key dropped at a reload falls back to the
+default. The settings resolved are published whole (below).
+
+An `option.go` puts its options under two comments, `// Construction
+options:` and `// Reloadable options:`, a reloadable option's doc naming its
+key: "`WithInterval` sets the default of `metrics.interval`". `framingo vet`'s
+`optionclass` holds the comments ([checks.md](checks.md)).
+
+**Why.** The config `Init` reads is what a running process may change, not
+the whole of what it was built with: a restart does not change the database
+a service talks to. An option is an entry, not the semantics, and one
+setting with two writers and no order let the last write win: `Init`
+overwrote a reloadable setting's option at the first start, so
+`tracing.WithSampleRatio` or `db.WithConnection` set in code never held,
+and the example read each key twice to pass it to an option `Init` then
+replaced. As the default, an option means the same at `New` and at a
+reload; resolving from the defaults alone makes a start depend on its config,
+never on the starts before it.
+
+**Cost.** A reloadable setting is held twice, its default and its value. The
+keys a service reads are not in its constructor's signature: its doc names
+them (`db.connection.*` in `pkgs/db.md`). A construction key in a config
+file looks as reloadable as any other there.
 
 ## A reload is seen whole
 

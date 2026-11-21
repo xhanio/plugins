@@ -37,10 +37,10 @@ Lifecycle facts that matter:
 - **`Init` runs on every restart** and re-reads the `tracing.*` keys
   (`confutil.FromContext`; under `<name>.*` instead for a `WithName`d
   instance), so enabling, disabling, re-pointing, or
-  re-sampling tracing is a config edit + service restart. Config is the
-  authority: the reload runs through the same `applyOptions` + `setDefaults`
-  pair the constructor uses, so an absent key reads zero and lands on the
-  default rather than preserving whatever construction set. The previous
+  re-sampling tracing is a config edit + service restart. Each key is
+  resolved over the default its option set: where the config sets it the
+  config wins, where it does not the default stands
+  ([design/config.md](../design/config.md)). The previous
   pipeline is flushed (bounded by 5s) and replaced; `Provider()` stays the
   same, and follows it.
 - **Disabled means noop, not nil.** `Provider()` always returns a working
@@ -91,22 +91,22 @@ matching otlp's own retry-on default.
 
 ## Options
 
-`WithLogger`, `WithName` (which also moves the config root — a manager named
-`otel` reads `otel.*`), plus the construction-time values the wiring layer
-reads out of config and the `tracing.*` keys re-apply on every `Init`:
-`WithEnabled`, `WithExporter(name, config)` — the registry name together
-with the kv block its factory strict-decodes, one decision since the block
-only has meaning for the exporter that reads it (nil config = exporter
-defaults; the programmatic twin of `tracing.exporter` + `tracing.config`) —
-and `WithSampleRatio` (default 1.0, wrapped in `ParentBased` so remote
-parents keep their sampling decision).
+Construction options: `WithLogger`, `WithName` (which also moves the config
+root — a manager named `otel` reads `otel.*`).
 
-Reading config at construction is the house pattern ([config.md](config.md)):
-`service.go` maps keys onto options, and `Init` re-applies the subset that
-may change across a restart — for tracing that happens to be all of them,
-through the very same options. So the options are the wiring layer's reading
-of config, not a second source of truth: an app that wires them without also
-supplying config gets the defaults back on the first `Init`.
+Reloadable options, each the default of a `tracing.*` key `Init` re-reads at
+every start, the config winning where it sets the key
+([design/config.md](../design/config.md)): `WithEnabled` (`tracing.enabled`),
+`WithExporter(name, config)` (`tracing.exporter` and `tracing.config` — the
+registry name and the kv block its factory strict-decodes, nil config =
+exporter defaults; the block belongs to the exporter in effect, so a config
+naming another exporter takes only its own block, and a config block alone
+configures the exporter the code chose) and `WithSampleRatio`
+(`tracing.sample_ratio`, 1.0, zero being unset, wrapped in `ParentBased` so remote parents
+keep their sampling decision). An app that enables tracing in code with
+`WithEnabled(true)` keeps it on until a config says `tracing.enabled:
+false`; the wiring passes none of them when the config file is the one
+source, as the example's does.
 
 The span resource is the build's application identity and is **not
 configurable at all** — no option, no config key: the binary knows which
@@ -120,9 +120,9 @@ own unknown-service placeholder.
 
 `WithEnabled` is its own switch, and **choosing an exporter never implies
 it**: `WithExporter` (or `tracing.exporter`) says *where* spans would go if
-the service were on, nothing more. Nothing traces until `tracing.enabled` is
-true — set at construction by the wiring layer reading the key, and re-read
-by `Init` on every restart so the key stays the durable ops switch.
+the service were on, nothing more. Nothing traces until it is enabled — by
+`tracing.enabled`, re-read at every `Init` so the key stays the durable ops
+switch, or by a `WithEnabled(true)` default no key overrides.
 
 There is also deliberately **no instance-injection option**: everything is a
 `Factory`. An exporter whose construction no config can express (vendor
