@@ -37,7 +37,8 @@ a configuration no file ever said.
 **Decision.** Nothing watches the config file. The example re-reads it only
 on SIGHUP: it checks that the file reads — one that does not changes
 nothing, and everything goes on running — then stops every service, re-reads
-the file, and inits and starts them on it. A restart the monitor makes
+the file, and inits and starts them on it — the init in one pass, whatever
+the boot's wait, so a file whose values fail starts what it can. A restart the monitor makes
 reads the version last read.
 
 **Why.** A change taking effect whenever the file is written is of little

@@ -191,9 +191,9 @@ func (m *manager) initServices() error {
 	// services see the viper only as the read-side Config the supervisor carries into Init
 	m.services = supervisor.New(confutil.New(m.config),
 		supervisor.WithLogger(m.log),
-		// what does not come up is waited for, for as long as it takes: the
-		// wait doubles from 1s to one try in 5m, each blocked try logged with
-		// its error; a service must not start without its dependencies
+		// at boot, what does not come up is waited for, as long as it takes:
+		// the wait doubles from 1s to one try in 5m, each blocked try logged
+		// with its error; a reload's Init makes one pass, a broken file failing it
 		supervisor.WithInitPolicy(-1, time.Second, 5*time.Minute),
 		// a Start that takes seconds is stuck: failing it here records why,
 		// within the liveness probe's budget for Init and every Start

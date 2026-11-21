@@ -184,9 +184,9 @@ nor a `Reconcile` since has failed
 - **A failed `Start` still starts the supervisor**: its monitor runs, and `Stop`
   stops what did start. Whether the process goes on is the caller's call. The
   example waits at `Init` at boot until every service inits, and exits on a
-  failed `Start`; a SIGHUP reload, in a process already serving, starts
-  what it can after a failed `Init`, as the supervisor's own `Restart` does,
-  the error logged and in `/readyz`.
+  failed `Start`; a SIGHUP reload, in a process already serving, inits in
+  one pass and starts what it can after a failed `Init`, as the
+  supervisor's own `Restart` does, the error logged and in `/readyz`.
 
 ## Reconciling with a dependency
 
@@ -229,9 +229,14 @@ messagebus subscribes every module again.
 
 By default `Init` is one pass: each service's turn checks only that its
 dependencies' `Init` succeeded, and fails otherwise — no probing, no
-waiting. `WithInitPolicy` turns each turn into a bounded retry loop for
-slow-starting infrastructure (a database still bootstrapping when the
-process boots):
+waiting. `WithInitPolicy` turns each turn of the first `Init` — the boot's —
+into a retry loop for slow-starting infrastructure (a database still
+bootstrapping when the process boots). A later `Init`, a SIGHUP reload's or
+the supervisor's own `Restart`, makes one pass whatever the policy: the
+process was serving and its dependencies ran a moment ago, so what fails is
+the change — a config that does not hold, which no wait fixes — and the
+pass returns, for what can start to start and the monitor's restarts to
+take the rest:
 
 ```go
 mgr := supervisor.New(confutil.New(config),
