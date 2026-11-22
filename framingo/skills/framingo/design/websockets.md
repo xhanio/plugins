@@ -50,8 +50,9 @@ parked until the server closes the connection, once the handler returns.
 
 **Decision.** `wsutil.Close(ctx, conn, err)` ends a connection once its
 handler returned: a normal closure for nil; nothing for the peer's own close;
-released with nothing sent when the peer dropped it (EOF); going away once
-`ctx` ended; the status and reason of a `wsutil.CloseWith(status, reason)` —
+released with nothing sent when the peer dropped it (EOF) or a read's
+context ended (`ReadFirst`'s `ctx.Err()`), which tore the connection down;
+going away once `ctx` ended; the status and reason of a `wsutil.CloseWith(status, reason)` —
 a refusal, a displacement — reporting no failure; otherwise an internal
 error carrying `err`, the one case it returns, for the caller to log. A
 reason is cut to the 123 bytes a close frame carries.

@@ -70,8 +70,9 @@ func (r *router) Health(c api.Context) error {
 // Events backs `method: WS`. WebSocket handlers take the extra *websocket.Conn
 // (github.com/coder/websocket, not gorilla). The middleware stack still runs
 // before the upgrade; once upgraded, the server closes the connection by what
-// the handler returned (wsutil.Close): nil, the peer closing, or EOF is a
-// normal close, any other error a StatusInternalError, logged. When the
+// the handler returned (wsutil.Close): nil is a normal close; the peer closing,
+// an EOF or a context's end sends nothing more; a wsutil.CloseWith its own
+// status; any other error a StatusInternalError, logged. When the
 // server stops it closes the connection with StatusGoingAway, so the handler's
 // reads and writes fail and it returns. To relay a messagebus messenger, hand
 // the connection to wsutil.Bridge, as the example's messagebus router does.
