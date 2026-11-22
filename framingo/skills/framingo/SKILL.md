@@ -1,11 +1,11 @@
 ---
 name: framingo
 description: Use when working with Framingo (`github.com/xhanio/framingo`) Go code — bootstrapping a new framingo backend project, creating services, registering with the supervisor, configuring HTTP servers/routers, the database service, pub/sub messaging, or implementing service lifecycle interfaces. Triggers on mentions of framingo, "new Go backend", service lifecycle, supervisor, handler groups, or any framingo package imports.
-compatibility: Requires Go 1.25+. Documents github.com/xhanio/framingo v0.9.10 — where the repo's go.mod pins a different framingo version, trust the code over this prose.
+compatibility: Requires Go 1.25+. Documents github.com/xhanio/framingo v0.9.11 — where the repo's go.mod pins a different framingo version, trust the code over this prose.
 metadata:
   author: xhanio
-  version: "1.15.2" # mirrors plugin.json; bump both together
-  framingo: v0.9.10 # the framework version these docs describe
+  version: "1.16.0" # mirrors plugin.json; bump both together
+  framingo: v0.9.11 # the framework version these docs describe
 ---
 
 # Framingo - Service-Oriented Go Framework
@@ -78,6 +78,7 @@ One file per concept, in two halves — `pkgs/` is how to **use framingo's packa
 | [design/websockets.md](design/websockets.md) | `wsutil.Bridge` as a session utility, ending one that lost its subscription, shaped by options and `ReadFirst`; `wsutil.Close` by the handler's result, a `CloseWith` its own; the server closing its connections on stop |
 | [design/certificates.md](design/certificates.md) | CSRs keep the requester's key; a server CA and an agent CA; CA keys in the database alone; downloads encoded as the caller asks; TLS verifies each side against the CAs it is given |
 | [design/checks.md](design/checks.md) | Which decisions a machine checks, and by what: the lint config's import boundaries and forbidden calls, `framingo vet`'s analyzers, the router, docs and template tests; how an exception carries its reason; `framingo verify` |
+| [design/request-context.md](design/request-context.md) | Where a middleware puts a request value — the request's context (`fapi.SetContext`) for what downstream reads, echo's store for the HTTP layer's own — and `api.Context` answering from the request's context as the handler got it |
 | [design/comments.md](design/comments.md) | What a comment says — what the code cannot: a caller's contract, why, an option's key and built-in default — a design note named instead of its reasoning repeated, no history |
 | [design/migrations.md](design/migrations.md) | Migrate on start locally, once per release in prod (`exampleapp migrate`), env-overridable config |
 
@@ -241,8 +242,9 @@ For the full category rules, type-separation example, server component file stru
 - Don't place `.go` files at a `pkg/` category root — every category is a grouping folder; code lives in subdirectories (`pkg/services/user/`, not `pkg/services/foo.go`).
 - A router's `prefix` MUST match the package's domain (e.g., `routers/user/` → `/users`), not an arbitrary path. One router.yaml may hold several handler groups, one per `---`-separated document, each with its own `prefix` and group middlewares and all served by one `Handlers()` — for a resource with a second surface, such as `/users` and `/user`. A route declared twice — in one group, across groups or across routers — fails registration with a `Conflict`.
 - Don't declare handlers as `func(c echo.Context) error` — use the project's `api.Context` (`<project>/pkg/types/api`). Handlers that take `echo.Context` compile and run, so nothing tells you it's wrong; you just lose `context.Context` (forcing `c.Request().Context()` at every service call) and the `Credential()`/`Session()`/`TraceID()` helpers.
+- Don't `c.Set` in a middleware what a service reads through its `context.Context` — the credential, the session, a transaction: echo's store is reset for the next request once the handler returns, so a goroutine the request left reads another request's, and a `context.Context` handed on without `c` never sees it. Put it in the request's context with `fapi.SetContext`, a writer helper beside its reader (`entity.WithCredential`/`CredentialFrom`); `c.Set` is for the HTTP layer's own bookkeeping and what the handler writes ([design/request-context.md](design/request-context.md)).
 - Don't hand-write the `Handlers()` map — each router's `router.go` returns `api.DiscoverHandlers(r)` (plus the debug log). Listing `map[string]any{"ListUsers": r.ListUsers}` by hand forces `echo.HandlerFunc` signatures (so you lose `api.Context`) and breaks on rename. Keep it in `router.go`; `handler.go` holds bodies only.
-- Don't look for `Context` in framingo's `pkg/types/api` — it isn't there. `Context`/`DiscoverHandlers` are **project**-side (`example/pkg/types/api/api.go`); framingo's package (aliased `fapi`) only has `Router`, `Middleware`, `ErrorBody`, `ContextKey*`. Importing both unaliased is a compile error — alias the framework one `fapi`.
+- Don't look for `Context` in framingo's `pkg/types/api` — it isn't there. `Context`/`DiscoverHandlers` are **project**-side (`example/pkg/types/api/api.go`); framingo's package (aliased `fapi`) only has `Router`, `Middleware`, `ErrorBody`, `ContextKey*`, `SetContext`. Importing both unaliased is a compile error — alias the framework one `fapi`.
 - Don't hand-write `api.Context`/`DiscoverHandlers` from this skill's prose — copy [_templates/api-context.go](_templates/api-context.go). A reconstruction compiles but diverges, and every handler in the project then depends on the divergence.
 - Don't give a router a `pkg/services/...` dependency — it takes the `model.X` business interface. Importing the service package leaks the implementation and its lifecycle methods.
 - Don't skip a layer: routers and middlewares call services only — never `services/repository/`, `types/orm/`, or `db`; services persist through their own `Repository` interface — the `repo.*` contracts declared in their `model.go` — never `db.Manager`/GORM directly. `orm` types stop at the repository boundary — the repository maps rows to `entity` and the `repo` contracts speak entity only — and `api` DTOs stop at the router.

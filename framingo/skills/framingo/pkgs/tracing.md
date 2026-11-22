@@ -187,7 +187,7 @@ Per request it: extracts the W3C remote parent from the headers, starts a
 `SpanKindServer` span (`http.request.method` — through the same
 known-methods mapping as the server metrics, so a made-up method reads
 `_OTHER` — `network.protocol.version`, `url.path`, `client.address`),
-pushes it into the request context with `c.SetRequest(r.WithContext(ctx))`
+pushes it into the request context with `fapi.SetContext(c, ctx)`
 — which the project's `api.Context` bridges to every handler and service
 call — and after the chain returns, renames the span to the
 low-cardinality route template (`GET /api/items/:id`), sets `http.route`

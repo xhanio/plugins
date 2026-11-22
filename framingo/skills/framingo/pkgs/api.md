@@ -124,7 +124,7 @@ What you get over a bare `echo.Context`:
 | | `echo.Context` | project `api.Context` |
 |---|---|---|
 | Call a context-aware service | `svc.Get(c.Request().Context(), id)` | `svc.Get(c, id)` — `c` *is* a `context.Context` |
-| Read the credential | `v := c.Get(fapi.ContextKeyCredential)` + nil check + type assert | `cred, ok := c.Credential()` |
+| Read the credential | `entity.CredentialFrom(c.Request().Context())`, which misses one a handler `c.Set` | `cred, ok := c.Credential()` |
 | Add a new per-request helper | touch every handler signature | add one method to your `api.go` |
 
 The framework still accepts raw `echo.HandlerFunc` / `func(echo.Context) error`, and such handlers compile and serve traffic — nothing will flag them. That path exists for third-party/legacy handlers; **new handlers should not use it**. Let `api.DiscoverHandlers` wrap the richer signature into the echo one at registration time.

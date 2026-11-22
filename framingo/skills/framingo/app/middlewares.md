@@ -12,7 +12,7 @@ The example ships seven under `pkg/middlewares/`, one package each, a
 |---|---|
 | `cors` | Answers cross-origin requests; server-level, since preflights match no route |
 | `deflate` | Inflates compressed request bodies, with a decompression-bomb cap |
-| `authnuser` | Session auth — sets `fapi.ContextKeyCredential` / `ContextKeySession` |
+| `authnuser` | Session auth — puts the credential and session in the request's context (`entity.WithCredential`/`WithSession`, read by `CredentialFrom`/`SessionFrom`) |
 | `authnagent` | Client-certificate auth for agents (via the certificate service) |
 | `authz` | Permission check against the route's declared `permission:` |
 | `feature` | License gating |

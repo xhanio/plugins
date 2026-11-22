@@ -78,7 +78,7 @@ func (r *router) Example(c api.Context) error {
 
 Why this is the pattern:
 
-- **One value, both contracts.** `c` satisfies `echo.Context` (bind/respond) *and* `context.Context` — `r.em.HelloWorld(c, ...)` passes it straight through, so cancellation/deadlines propagate for free, no `c.Request().Context()` unwrap.
+- **One value, both contracts.** `c` satisfies `echo.Context` (bind/respond) *and* `context.Context` — `r.em.HelloWorld(c, ...)` passes it straight through, so cancellation/deadlines propagate for free, no `c.Request().Context()` unwrap. Its `Deadline`/`Done`/`Err` are the request's context as the handler got it, so a goroutine the call leaves behind — database/sql's, once a query's rows close — may still ask them after the handler returned; the echo half (`Param`, `Bind`, string-key `Value`s) must not outlive the handler, since echo pools its contexts (`WrapContext` in `api.go`, [design/request-context.md](../design/request-context.md)).
 - **Helpers have a home.** `BindAny`/`Validate` above; `BindPath()`/`BindQuery()`/`BindForm()` for typed parameters (`c.BindPath().MustInt32("id", &userID).BindError()` in the user router); `Credential()`/`Session()`/`TraceID()` where a handler needs auth state — `Credential()` is `entity.CredentialFrom(c)`, the same reader services use. All live on the interface. Adding one later touches your `api.go` only — never every handler signature.
 - **Bad input is a 400.** A failed bind is `errors.BadRequest`; `c.Validate` reports a failed `validate` tag as `InvalidArgument`, which the server answers with a 400 — so wrapping its error is enough ([design/who-decides.md](../design/who-decides.md#bad-input-is-a-400)).
 - **You own it.** The interface is project-side; extending it needs no framingo change.

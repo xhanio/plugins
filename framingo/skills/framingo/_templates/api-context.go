@@ -51,35 +51,40 @@ type Context interface {
 	TraceID() (string, bool)
 }
 
-// ctx is the default Context implementation: an echo.Context with
-// context.Context semantics layered on by deferring to the underlying
-// *http.Request's context for Deadline/Done/Err, and routing Value lookups
-// through echo's request-scoped Get store.
+// ctx is the default Context implementation: an echo.Context answering
+// Deadline/Done/Err from the request's context as the handler got it, and
+// string-key Value lookups from echo's request-scoped Get store first.
 type ctx struct {
 	echo.Context
+	// the request's context as the handler got it: database/sql reads Done and Err
+	// from a goroutine of its own, which may run after echo reset this pooled
+	// echo.Context for another request
+	request context.Context
 }
 
 func (c *ctx) Deadline() (time.Time, bool) {
-	return c.Request().Context().Deadline()
+	return c.request.Deadline()
 }
 
 func (c *ctx) Done() <-chan struct{} {
-	return c.Request().Context().Done()
+	return c.request.Done()
 }
 
 func (c *ctx) Err() error {
-	return c.Request().Context().Err()
+	return c.request.Err()
 }
 
-// Value routes string keys through echo's request-scoped Get store (that's
-// where framingo's ContextKey* values land), and falls through to the
-// underlying request context for everything else — so typed context keys set
-// by stdlib/third-party middleware still resolve.
+// Value answers a string key from echo's request-scoped Get store, where
+// framingo's ContextKey* values land, and any key the store does not hold from
+// the request's context: a typed key, or a string one a middleware put there with
+// context.WithValue, as db.WrapContext puts a transaction.
 func (c *ctx) Value(key any) any {
 	if k, ok := key.(string); ok {
-		return c.Get(k)
+		if v := c.Get(k); v != nil {
+			return v
+		}
 	}
-	return c.Request().Context().Value(key)
+	return c.request.Value(key)
 }
 
 func (c *ctx) TraceID() (string, bool) {
@@ -107,6 +112,21 @@ func (c *ctx) BindAny(i any) error {
 	return c.Bind(i)
 }
 
+// WrapContext adapts an echo.Context into a Context. WrapHandler and WrapWebSocket
+// call it; call it yourself only to serve a handler on a bare echo instance, as a
+// test does.
+//
+// Deadline, Done and Err, and Value for any key but a string, answer from the
+// request's context as it is at the call, after the middlewares: a goroutine the
+// request started, database/sql's once a query's rows close, may still ask them after
+// the handler returned. The echo half, Value's string keys, Param, Bind and the rest,
+// must not outlive the handler: echo pools its contexts and resets one for the next
+// request. context.WithoutCancel(c) drops the cancellation, not the echo half; work
+// that outlives the request takes what it needs as arguments.
+func WrapContext(c echo.Context) Context {
+	return &ctx{Context: c, request: c.Request().Context()}
+}
+
 // HandlerFunc / WebSocketHandlerFunc are the recommended handler signatures
 // for routers in this project. WrapHandler / WrapWebSocket adapt them into
 // the echo signatures the framework's server registers.
@@ -115,7 +135,7 @@ type HandlerFunc func(Context) error
 
 func WrapHandler(hf HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
-		return hf(&ctx{c})
+		return hf(WrapContext(c))
 	}
 }
 
@@ -123,7 +143,7 @@ type WebSocketHandlerFunc func(Context, *websocket.Conn) error
 
 func WrapWebSocket(wf WebSocketHandlerFunc) func(echo.Context, *websocket.Conn) error {
 	return func(c echo.Context, conn *websocket.Conn) error {
-		return wf(&ctx{c}, conn)
+		return wf(WrapContext(c), conn)
 	}
 }
 
@@ -169,14 +189,23 @@ func DiscoverHandlers(r any) map[string]any {
 // signatures stay `func(c api.Context) error`.
 //
 // Example, over your own pkg/types/entity package. Put the reader in entity,
-// so services read the credential the same way handlers do:
+// so services read the credential the same way handlers do, and its writer
+// beside it, for your authentication middleware:
 //
-//	// pkg/types/entity: works on c itself, because Value above answers
-//	// string keys from echo's store - pass c, not c.Request().Context()
+//	// pkg/types/entity: on c, Value above answers from echo's store, then the
+//	// request's context; a middleware passes c.Request().Context()
 //	func CredentialFrom(ctx context.Context) (*Credential, bool) {
 //	    cred, ok := ctx.Value(common.ContextKeyCredential).(*Credential)
 //	    return cred, ok && cred != nil
 //	}
+//
+//	func WithCredential(ctx context.Context, cred *Credential) context.Context {
+//	    //nolint:staticcheck // SA1029: framingo's keys are strings, shared with echo's store
+//	    return context.WithValue(ctx, common.ContextKeyCredential, cred)
+//	}
+//
+//	// in the authentication middleware, which holds an echo.Context:
+//	fapi.SetContext(c, entity.WithCredential(c.Request().Context(), cred))
 //
 //	// in the Context interface:
 //	Credential() (*entity.Credential, bool)
@@ -186,7 +215,9 @@ func DiscoverHandlers(r any) map[string]any {
 //	    return entity.CredentialFrom(c)
 //	}
 //
-// The value is whatever your authentication middleware stored under
-// fapi.ContextKeyCredential (= common.ContextKeyCredential). Framingo defines
-// the key; the type is yours. Session() over fapi.ContextKeySession follows
-// the same shape: c.Get the key, then assert your *entity.Session.
+// The request's context, not echo's store, because echo resets the store for
+// the next request once the handler returns, while a goroutine the request
+// started may still read the credential. Framingo defines the key
+// (fapi.ContextKeyCredential = common.ContextKeyCredential); the type is
+// yours. Session() over fapi.ContextKeySession follows the same shape:
+// entity.SessionFrom beside entity.WithSession.
