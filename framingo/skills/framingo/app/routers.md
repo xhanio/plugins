@@ -63,7 +63,7 @@ import (
 func (r *router) Example(c api.Context) error {
 	var req api.HelloWorldCreateRequest
 	if err := c.BindAny(&req); err != nil {
-		return errors.BadRequest.Newf("invalid request: %v", err)
+		return errors.BadRequest.Wrap(err)
 	}
 	if err := c.Validate(&req); err != nil {
 		return errors.Wrap(err)

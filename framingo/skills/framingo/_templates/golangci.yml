@@ -10,6 +10,7 @@ version: "2"
 linters:
   enable:
     - depguard
+    - errorlint
     - forbidigo
     - nolintlint
   settings:
@@ -50,6 +51,12 @@ linters:
         # any selector chain: viper.WatchConfig, v.WatchConfig, m.config.WatchConfig
         - pattern: (^|\.)(WatchConfig|OnConfigChange)$
           msg: the config is re-read on SIGHUP alone (design/config.md)
+    errorlint:
+      # an error matches by errors.Is and errors.As, never by == or a type
+      # assertion; a category may be compared, it is no error value (design/errors.md)
+      comparison: true
+      asserts: true
+      errorf: false # fmt.Errorf is forbidden above
     nolintlint:
       # an exception carries its reason (design/checks.md)
       require-explanation: true

@@ -54,8 +54,10 @@ released with nothing sent when the peer dropped it (EOF) or a read's
 context ended (`ReadFirst`'s `ctx.Err()`), which tore the connection down;
 going away once `ctx` ended; the status and reason of a `wsutil.CloseWith(status, reason)` —
 a refusal, a displacement — reporting no failure; otherwise an internal
-error carrying `err`, the one case it returns, for the caller to log. A
-reason is cut to the 123 bytes a close frame carries.
+error, the one case it returns `err`, for the caller to log. That reason is
+what a 500 would tell the client — a message the server's code wrote, else
+the status text ([errors.md](errors.md#a-client-reads-what-the-server-wrote-never-what-it-wrapped)).
+A reason is cut to the 123 bytes a close frame carries.
 
 The connection is the server's: a handler returns, it does not close. The
 one exception is the bridge ending a session itself — a dropped

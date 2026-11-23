@@ -18,7 +18,9 @@ against the code they point at and copy (`pkg/tools/docs`).
 | depguard `services` | services do not import each other: each holds `types/model` interfaces, `model.Platform` among them | [narrow-contracts.md](narrow-contracts.md) |
 | depguard `framework` | a router, a middleware or a service imports no framework service package: it holds `common.*` or a `types/model` interface, and only the wiring imports `pkg/services/...` | [narrow-contracts.md](narrow-contracts.md) |
 | depguard `orm` | `types/orm` is imported by the repository alone | [data-access.md](data-access.md) |
-| depguard `errors`, forbidigo `fmt.Errorf` | errors come from `xhanio/errors`, which categorizes and wraps | — |
+| depguard `errors`, forbidigo `fmt.Errorf` | errors come from `xhanio/errors`, which categorizes and wraps | [errors.md](errors.md) |
+| errorlint `comparison`, `asserts` | an error matches by `errors.Is` and `errors.As`: no `==`, `!=` or `switch` on its value, no type assertion or type switch; tests included | [errors.md](errors.md) |
+| staticcheck `SA1019` | nothing deprecated is called: `errors.Cancaled`, `errors.Has` | [errors.md](errors.md) |
 | forbidigo `otel.Get*`/`Set*` | no otel globals: a handle is passed | — |
 | forbidigo `WatchConfig`/`OnConfigChange` | the config file is re-read on SIGHUP alone | [config.md](config.md) |
 | nolintlint | a `//nolint` names its linter, gives its reason and still silences something | — |
@@ -28,6 +30,7 @@ against the code they point at and copy (`pkg/tools/docs`).
 | `framingo vet`: `platformfirst` | an app service's `New` takes the platform first | [service-wiring.md](service-wiring.md) |
 | `framingo vet`: `gormfield` | no `*gorm.DB` is kept in a struct field outside the db service | [service-wiring.md](service-wiring.md) |
 | `framingo vet`: `optionclass` | every option in an `option.go` — an exported func returning an `…Option` — stands under a `// Construction options:` or `// Reloadable options:` comment | [config.md](config.md) |
+| `framingo vet`: `errmsg` | an `xhanio/errors` error has a message: no `Newf("")`, `Wrapf(err, "")`, `WithMessage("")` or bare `errors.New()` | [errors.md](errors.md) |
 | `framingo vet`: `confinit` | `confutil.FromContext` is called in `Init` alone | [config.md](config.md) |
 | `server.CheckRouter`, in each router's test | every `func:` in `router.yaml` is a discovered handler whose signature fits its method; no route twice | [who-decides.md](who-decides.md) |
 | the example's `apitest.CheckRouter` | a declared `permission:` is one `rbac` defines | [who-decides.md](who-decides.md) |

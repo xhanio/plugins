@@ -49,7 +49,7 @@ func (r *router) GetOrder(c api.Context) error {
 func (r *router) CreateOrder(c api.Context) error {
 	var req api.CreateOrderRequest // your DTO, defined in pkg/types/api
 	if err := c.BindAny(&req); err != nil {
-		return errors.BadRequest.Newf("invalid request: %v", err)
+		return errors.BadRequest.Wrap(err)
 	}
 	if err := c.Validate(&req); err != nil {
 		return errors.Wrap(err)

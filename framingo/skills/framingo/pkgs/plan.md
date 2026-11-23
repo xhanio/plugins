@@ -32,7 +32,7 @@ type Plan interface {
 // pkg/types/entity
 type Plan struct {
     ID          string
-    Metadata    labels.Set // k8s.io label set
+    Metadata    labels.Set // github.com/xhanio/labels: k8s label syntax, no k8s dependency
     Description string
     Kind        string     // a predefined kind, from which the plan manager builds the Task's Job
     Params      any        // what the kind takes: a jobs.Command for a command plan

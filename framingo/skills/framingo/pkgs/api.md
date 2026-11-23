@@ -398,7 +398,7 @@ func (r *router) Feed(c api.Context, conn *websocket.Conn) error {
 }
 ```
 
-**Lifecycle**: Middleware stack runs before upgrade (auth, logging, throttle all apply). A failed upgrade is a `BadRequest`; the origin check is skipped only under `server.WithDebug(true)`. Once upgraded, the server invokes the handler; on return, it closes the connection with `wsutil.Close` (`pkg/utils/wsutil`) by the handler's result: a normal close on `nil`, nothing more when the client closed the connection, released without a handshake when it dropped (EOF) or a read's context ended, `StatusGoingAway` once the server is stopping, the status and reason of a `wsutil.CloseWith(status, reason)` the handler returned — a refusal, say — and `StatusInternalError` (the error as the reason, cut to 123 bytes) otherwise - the one case logged via the server logger. The connection is hijacked, so a handler's error never reaches the error middleware or the client as an `ErrorBody`; the close status is all the client sees.
+**Lifecycle**: Middleware stack runs before upgrade (auth, logging, throttle all apply). A failed upgrade is a `BadRequest`; the origin check is skipped only under `server.WithDebug(true)`. Once upgraded, the server invokes the handler; on return, it closes the connection with `wsutil.Close` (`pkg/utils/wsutil`) by the handler's result: a normal close on `nil`, nothing more when the client closed the connection, released without a handshake when it dropped (EOF) or a read's context ended, `StatusGoingAway` once the server is stopping, the status and reason of a `wsutil.CloseWith(status, reason)` the handler returned — a refusal, say — and `StatusInternalError` otherwise, its reason what a 500 would tell the client (`fapi.PublicMessage`: a message the server's code wrote, else `Internal Server Error`), cut to 123 bytes - the one case logged, with its stack, via the server logger. The connection is hijacked, so a handler's error never reaches the error middleware or the client as an `ErrorBody`; the close status is all the client sees.
 
 A handler that relays the message bus need not write the loop: `return wsutil.Bridge(conn, messenger)` pumps JSON both ways until the session ends, closes the messenger, and returns how the server closes the connection — the example's `messagebus` router does exactly this ([pubsub.md](pubsub.md)).
 
@@ -515,21 +515,26 @@ type ErrorBody struct {
 }
 ```
 
-Returning `errors.NotFound.Newf(...)` from a handler sets `Status: 404` and `Kind: "NotFound"`. The `Kind` field is the wire-level signal that lets Go clients recover the original `xhanio/errors` category without rebuilding it from `Status` — see the next section.
+Returning `errors.NotFound.Newf(...)` from a handler sets `Status: 404` and `Kind: "NotFound"`, however the error was wrapped on the way out — `WrapError` reads it with `errors.CategoryOf`. The `Kind` field is the wire-level signal that lets Go clients recover the original `xhanio/errors` category without rebuilding it from `Status` — see the next section.
 
-`Message` is the outermost message only (`Error.Message()`), not the wrapped chain; `Code` and `Details` come from the error's `errors.WithCode(code, details)` option ([errors.md](errors.md)). A bare `errors.Category` returned from a handler (e.g. `return errors.Unauthorized`) emits the status + `Kind` with no message. The rest of `WrapError`'s mapping:
+`Message` is the outermost message your code wrote (`errors.MessageOf`), not the wrapped chain; `Code` and `Details` are the outermost `errors.WithCode(code, details)` in the chain (`errors.CodeOf`, [errors.md](errors.md)). A bare `errors.Category` returned from a handler (e.g. `return errors.Unauthorized`) emits the status + `Kind` with no message.
 
-| Returned error | Status | `Kind` |
+**A 5xx never carries a message your code did not write.** `errors.Wrapf(err, "failed to load user")` answers with `failed to load user`; `errors.Wrap(err)` or `errors.DBFailed.Wrap(err)` around a driver's error answers with the status text (`Internal Server Error`), never the driver's own text — a host, a user, a query. The whole chain stays in `Origin`, which the server logs. A 4xx with no message of yours says the text it received — an echo error's message, a failed validation's fields — since the caller fixes the request by it. The rest of `WrapError`'s mapping:
+
+| Returned error | Status, `Message` | `Kind` |
 |---|---|---|
-| `context.Canceled` / `context.DeadlineExceeded` (bare) | 499 / 408 | `Cancelled` / `DeadlineExceeded` |
-| `*echo.HTTPError` | its code — except 405, reported as 404 "api not found" | none |
-| `*api.ErrorBody` | passed through as is | as set |
+| `context.Canceled` / `context.DeadlineExceeded`, however wrapped | 499 with its message / 504 with the status text | `Canceled` / `DeadlineExceeded` |
+| an `errors.Combine` of several reasons no category wraps | 500, the status text | `Combined` |
+| an `*echo.HTTPError`, however wrapped, where no category was declared (`errors.Categorized`) | its code, its message | none |
+| an `*api.ErrorBody` returned as is (wrapped, it may be another service's: anything else) | passed through | as set |
 | a request matching no route | 404 | `NotFound` |
-| anything else | 500, raw `Error()` as `Message` | none |
+| anything else | 500, the status text | `Internal` |
+
+The server logs a 500's `Origin` with `%+v` — code, details and stack trace — and any other 5xx's with `%s`, the message chain alone: a 503 or 504 means a dependency or a deadline, where a stack says nothing and an outage repeats it on every request. At debug level every failed request logs `%+v`. Build production binaries with `-trimpath` (the example's `prod` env does), so those frames carry module paths rather than the build machine's.
 
 ### Request validation
 
-The server installs a `go-playground/validator` instance as each echo's validator, so `c.Validate(&body)` checks the DTO's `validate:` tags. A failed tag comes back as `errors.InvalidArgument` — a 400 — so a handler returns it with a plain `errors.Wrap(err)`; validating something that is not a struct stays uncategorised, a 500, since that is the handler's bug. Binding failures are the handler's to categorise (the example's handlers return `errors.BadRequest.Wrap(err)` from `c.Bind`).
+The server installs a `go-playground/validator` instance as each echo's validator, so `c.Validate(&body)` checks the DTO's `validate:` tags. A failed tag comes back as `errors.InvalidArgument` — a 400 — so a handler returns it with a plain `errors.Wrap(err)`; validating something that is not a struct stays uncategorised, a 500, since that is the handler's bug. A failed `c.Bind` is echo's `*HTTPError`, a 400 the server honours however it was wrapped; the example's handlers declare it anyway, `errors.BadRequest.Wrap(err)`.
 
 `Source` is populated automatically by the server's built-in error middleware with the name passed to `srvMgr.Add("<name>", ...)` (e.g. `"http"`, `"admin"`). It is informational — useful when a caller talks to multiple framingo servers or when a gateway aggregates errors from several upstreams. Clients SHOULD NOT branch logic on `Source` value (the server name is a deployment detail, not part of the API contract). Its main practical use is the client-side check at [`pkg/services/api/client/client.go`](https://github.com/xhanio/framingo/blob/main/pkg/services/api/client/client.go): a 4xx/5xx body that does not parse as an `ErrorBody`, or parses with an empty `Source`, did not originate from a framingo server — a load balancer's 503 page, an HTML error from an upstream proxy — and the client reports it as an `ErrorBody` with `Source: api.ErrorSourceUnknown` (`"Unknown"`), the response's status, the raw body as `Message`, and no `Kind`.
 
@@ -537,7 +542,7 @@ The server installs a `go-playground/validator` instance as each echo's validato
 
 The framingo HTTP client ([client.md](client.md)) decodes any 4xx/5xx response into a `*api.ErrorBody` and returns it as the error from `Do`/`Send`, alongside the response. On that path the body has already been read and closed, and is replaced with an empty `io.NopCloser`, so closing it again is harmless. A transport failure (or a request that could not be built) returns a **nil** response, so check `err` before touching `resp`.
 
-**Recommended error-handling pattern** (requires `github.com/xhanio/errors` v1.0.3+ for `LookupCategory`, v1.1.0+ for its `errors.As`):
+**Recommended error-handling pattern** (`github.com/xhanio/errors` v1.3, which framingo requires):
 
 ```go
 import (
@@ -561,13 +566,15 @@ func (c *myClient) doJSON(ctx context.Context, method, path string, in, out any)
             if cat := errors.LookupCategory(eb.Kind); cat != nil {
                 return cat.Wrap(eb)
             }
-            return eb // unknown category — preserve the structured payload
+            // Unknown category: wrapped, so a handler returning it never passes the
+            // backend's body off as its own answer; errors.As still finds it.
+            return errors.Wrap(eb)
         }
         return errors.Wrap(err) // transport / non-API error
     }
     defer resp.Body.Close()
     if out != nil {
-        return json.NewDecoder(resp.Body).Decode(out)
+        return errors.Wrap(json.NewDecoder(resp.Body).Decode(out))
     }
     return nil
 }
@@ -588,6 +595,8 @@ if errors.As(err, &eb) {
         eb.Status, eb.Kind, eb.Code, eb.Details)
 }
 ```
+
+A category recovered this way is the backend's: returned from your own handler, the backend's 404 becomes your 404. When it means something else to you, absorb it — `errors.Unavailable.Wrapf(errors.Handled(err), "call backend")` ([errors.md](errors.md#absorbing-a-downstream-error)).
 
 `github.com/xhanio/errors` has its own `As` (the stdlib's, re-exported), so there is no need to import the stdlib `errors` under an alias.
 

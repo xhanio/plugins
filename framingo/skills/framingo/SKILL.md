@@ -1,11 +1,11 @@
 ---
 name: framingo
 description: Use when working with Framingo (`github.com/xhanio/framingo`) Go code — bootstrapping a new framingo backend project, creating services, registering with the supervisor, configuring HTTP servers/routers, the database service, pub/sub messaging, or implementing service lifecycle interfaces. Triggers on mentions of framingo, "new Go backend", service lifecycle, supervisor, handler groups, or any framingo package imports.
-compatibility: Requires Go 1.25+. Documents github.com/xhanio/framingo v0.9.11 — where the repo's go.mod pins a different framingo version, trust the code over this prose.
+compatibility: Requires Go 1.25+. Documents github.com/xhanio/framingo v0.9.12 — where the repo's go.mod pins a different framingo version, trust the code over this prose.
 metadata:
   author: xhanio
-  version: "1.16.0" # mirrors plugin.json; bump both together
-  framingo: v0.9.11 # the framework version these docs describe
+  version: "1.17.0" # mirrors plugin.json; bump both together
+  framingo: v0.9.12 # the framework version these docs describe
 ---
 
 # Framingo - Service-Oriented Go Framework
@@ -77,6 +77,7 @@ One file per concept, in two halves — `pkgs/` is how to **use framingo's packa
 | [design/config.md](design/config.md) | A setting is construction, fixed at `New`, or reloadable, its option the default of a key `Init` re-reads, the config winning where it sets the key; config read in `Init` from the context, a restart as the reload; a reload published whole; the file re-read on SIGHUP alone |
 | [design/websockets.md](design/websockets.md) | `wsutil.Bridge` as a session utility, ending one that lost its subscription, shaped by options and `ReadFirst`; `wsutil.Close` by the handler's result, a `CloseWith` its own; the server closing its connections on stop |
 | [design/certificates.md](design/certificates.md) | CSRs keep the requester's key; a server CA and an agent CA; CA keys in the database alone; downloads encoded as the caller asks; TLS verifies each side against the CAs it is given |
+| [design/errors.md](design/errors.md) | Errors wrapped where they enter from another package, our own returned as they are; matched by `Is`/`As`, never `==`; a category declared once, outermost, a context's error kept as it is; another service's error absorbed with `Handled`; a `Combine` declared; never an empty message; a 5xx tells the client only what the server's code wrote; where a stack is logged |
 | [design/checks.md](design/checks.md) | Which decisions a machine checks, and by what: the lint config's import boundaries and forbidden calls, `framingo vet`'s analyzers, the router, docs and template tests; how an exception carries its reason; `framingo verify` |
 | [design/request-context.md](design/request-context.md) | Where a middleware puts a request value — the request's context (`fapi.SetContext`) for what downstream reads, echo's store for the HTTP layer's own — and `api.Context` answering from the request's context as the handler got it |
 | [design/comments.md](design/comments.md) | What a comment says — what the code cannot: a caller's contract, why, an option's key and built-in default — a design note named instead of its reasoning repeated, no history |
@@ -162,7 +163,7 @@ keeping its ctx, a held service missing from `Dependencies` or a
 `Dependencies` that filters, a service's
 `New` not taking the platform first, a `*gorm.DB` kept in a field, config
 read outside `Init`, an option in an `option.go` marked neither construction
-nor reloadable. A boundary or vet
+nor reloadable, an error given no message. A boundary or vet
 failure names the design note it enforces — `(design/narrow-contracts.md)`
 — so read that note before changing the code or opting out; a `//nolint`,
 or a `//framingo:ignore <rule> <reason>` for an analyzer, carries its
@@ -237,8 +238,9 @@ For the full category rules, type-separation example, server component file stru
 ## Common Mistakes
 
 - `errors.New("msg")` does not compile — use `errors.Newf("msg")`. `New` takes functional options, not a message.
-- Never return raw `err` — always `errors.Wrap(err)` or `errors.Wrapf(err, "context")`. Raw returns drop the stack trace.
+- Wrap an error where it enters from another package — a driver, the standard library, a client — with `errors.Wrap(err)`, `errors.Wrapf(err, "context")` or a category's `Wrap`: that catches its stack and says what it means. An error from your own code already has its stack: return it as it is, or `Wrapf` it with what this level knows ([pkgs/errors.md](pkgs/errors.md#wrapping-errors)).
 - Never use `fmt.Errorf` or stdlib `errors.New` — the API server's error handler routes on `xhanio/errors` categories to set HTTP status.
+- Never match an error with `==`, `!=`, `switch err { case X: }` or a type assertion — use `errors.Is` / `errors.As` (`switch { case errors.Is(err, gorm.ErrRecordNotFound): }`); one wrap and the comparison silently fails. Read a category with `errors.CategoryOf`, never off `err.(errors.Error)`. errorlint reports it ([design/errors.md](design/errors.md)).
 - Don't place `.go` files at a `pkg/` category root — every category is a grouping folder; code lives in subdirectories (`pkg/services/user/`, not `pkg/services/foo.go`).
 - A router's `prefix` MUST match the package's domain (e.g., `routers/user/` → `/users`), not an arbitrary path. One router.yaml may hold several handler groups, one per `---`-separated document, each with its own `prefix` and group middlewares and all served by one `Handlers()` — for a resource with a second surface, such as `/users` and `/user`. A route declared twice — in one group, across groups or across routers — fails registration with a `Conflict`.
 - Don't declare handlers as `func(c echo.Context) error` — use the project's `api.Context` (`<project>/pkg/types/api`). Handlers that take `echo.Context` compile and run, so nothing tells you it's wrong; you just lose `context.Context` (forcing `c.Request().Context()` at every service call) and the `Credential()`/`Session()`/`TraceID()` helpers.
