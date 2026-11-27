@@ -8,32 +8,37 @@
 |-------|----------|-------------|
 | `product` | Yes | Product name, used for env var prefixes and metadata |
 | `model` | No | Product model identifier; sets `info.ProductModel` |
-| `version` | No | Product version string |
+| `version` | No | Product version; falls back to the Git tag |
 | `domain` | No | Domain name |
-| `module` | No | Go module path (auto-detected from go.mod) |
+| `module` | No | Go module path; read from the `go.mod` beside project.yaml when unset. `gopro init` needs one of the two |
 
 ### Environment Settings (default / env.{name})
 
+Only `image_tag` has a built-in default. The `build/…`, `bin/`, `env/…` and
+`dist/…` paths used throughout are the layout `gopro example` writes, not values
+gopro falls back to.
+
 | Field | Default | Description |
 |-------|---------|-------------|
-| `binary_src` | `build/binary` | Source directory for binary code |
-| `binary_tgt` | `bin/` | Output directory for compiled binaries |
+| `binary_src` | `""` | Parent directory of binary sources; a binary builds from `{binary_src}/{name}` |
+| `binary_tgt` | `""` | Output directory for compiled binaries (unset: the working directory) |
 | `binary_build_env` | `[]` | Environment variables for go build (e.g., `CGO_ENABLED=0`) |
 | `binary_build_args` | `[]` | Additional go build arguments |
 | `binaries` | `[]` | List of binary names to build |
-| `image_build_src` | `build/image` | Source directory for Dockerfiles |
+| `image_build_src` | `""` | Parent directory of Dockerfiles; an image builds from `{image_build_src}/{name}/Dockerfile` |
 | `image_prefix` | `""` | Docker registry prefix |
 | `image_tag` | `latest` | Default image tag |
 | `image_build_env` | `[]` | Environment applied to the `docker build` / `docker tag` processes |
+| `image_build_args` | `[]` | Extra `docker build` flags; `-t`, `-f` and the injected build args are reserved |
 | `images` | `[]` | List of image names to build |
 | `config_src` | `""` | Config template source directory |
-| `config_tgt` | `""` | Config output directory |
+| `config_tgt` | `""` | Config output directory (unset: render in place, beside the templates) |
 | `configs` | `[]` | List of config names to generate |
 | `kubernetes_src` | `""` | K8s template source directory |
-| `kubernetes_tgt` | `""` | K8s output directory |
+| `kubernetes_tgt` | `""` | K8s output directory (unset: render in place) |
 | `kubernetes_templates` | `[]` | List of K8s template names |
 | `docker_compose_src` | `""` | Docker Compose template source |
-| `docker_compose_tgt` | `""` | Docker Compose output directory |
+| `docker_compose_tgt` | `""` | Docker Compose output directory (unset: the working directory); never cleared |
 
 ### Build Specification
 
@@ -97,19 +102,18 @@ values in the build environment.
 | Field | Required | Description |
 |-------|----------|-------------|
 | `name` | Yes | Component name |
-| `files` | No | Glob patterns for files to process |
+| `files` | No | Glob patterns for files to process (unset: every file). A `secret.env` is always skipped |
 
 **Docker Compose entry:**
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `files` | No | Glob patterns for files to process |
+| `files` | No | Glob patterns for files to process (unset: every file). A `secret.env` is always skipped |
 
 ## Docker Build Arguments
 
-When building images from Dockerfiles, these four build args are automatically
-provided. There is **no configuration hook for adding further `--build-arg`
-values** — to influence a build in other ways, set `image_build_env`.
+When building images from Dockerfiles, these four build args are always
+provided:
 
 | Arg | Value |
 |-----|-------|
@@ -118,17 +122,23 @@ values** — to influence a build in other ways, set `image_build_env`.
 | `CONFIG_TGT` | Config target directory |
 | `CONFIG_DIR` | Component config directory, from the matching binary's `config_dir` |
 
+`image_build_args` passes extra flags to `docker build` (for example
+`--platform`, `--target`, `--secret`, or more `--build-arg`s), placed after
+gopro's own and before the Dockerfile and context. `-t`/`--tag`, `-f`/`--file`
+and the four build args above are reserved for gopro and rejected.
+
 The build runs as:
 
 ```bash
-docker build -t <image> --no-cache \
+docker build -t <image> [--no-cache] \
   --build-arg NAME=... --build-arg BASE=... \
   --build-arg CONFIG_TGT=... --build-arg CONFIG_DIR=... \
+  [image_build_args...] \
   -f <project_root>/<build_src>/Dockerfile <project_root>
 ```
 
-Builds always use `--no-cache`, and the build context is always the project root,
-so a Dockerfile may `COPY` from anywhere in the repository.
+`--no-cache` is passed unless `--cache` is given. The build context is always
+the project root, so a Dockerfile may `COPY` from anywhere in the repository.
 
 ## Image Tagging and Push
 
@@ -140,6 +150,7 @@ Image references resolve as `[prefix/]repo:tag`, where `prefix` falls back to
 |------|--------|
 | `-p, --push` | Push after building; skipped for images with `no_push: true` |
 | `-l, --latest` | Additionally tag and push `:latest`. Requires `--push` — alone it warns and does nothing |
+| `--cache` | Use the docker layer cache; without it builds pass `--no-cache` |
 
 `--latest` resolves the second reference through the same prefix/repo logic, and
 skips the extra push when the image already builds as `:latest`. This replaces
@@ -167,7 +178,7 @@ setting package vars on `github.com/xhanio/framingo/pkg/types/info`. A raw
 | `GitTag` | `git describe --tags --always` |
 | `GitCommit` | `git rev-parse HEAD` |
 | `ProjectName` | The Go module path |
-| `ProjectPath` | Project directory relative to `$GOPATH/src` |
+| `ProjectPath` | Project directory relative to `$GOPATH/src`; outside GOPATH, the module path |
 | `ProjectRoot` | Absolute working directory of the build |
 
 The three Git values are best-effort: outside a repository the build still
@@ -258,6 +269,18 @@ Args replace because Go build flags are positional and repeatable, so a key-wise
 merge cannot distinguish an override from an accumulation. Only an unset level
 inherits, which means an explicit `[]` is how you build with no arguments.
 
+Once a level is chosen, gopro assembles the `go build` line from it.
+Tool-flag strings (`-ldflags`, `-gcflags`, `-asmflags`, `-gccgoflags`)
+**accumulate**: occurrences sharing a package pattern join into one flag at the
+position of the first, and the injected metadata `-X` fields join `-ldflags`
+after yours, so `[-ldflags, '-s', -ldflags, '-w']` links with `-s -w`. This
+differs from raw `go build`, where the last `-ldflags` wins. An empty value
+still resets the ones before it. For `-ldflags`, `all=` counts as unpatterned
+and any other pattern is an error. `-o` and
+`-X github.com/xhanio/framingo/pkg/types/info.*` are reserved for gopro and
+rejected, and so is any positional argument (a package path or `--`):
+gopro supplies the package. Every other flag passes through unchanged.
+
 ```yaml
 default:
   binary_build_env: [CGO_ENABLED=1, FOO=from_default]
@@ -291,7 +314,7 @@ vars on the binary spec and let `env.{name}` vary only what changes.
 
 1. Resolve the target from `-o`/`-t`, then `*_tgt`, then `*_src` — an unset target renders the component in place, beside its templates
 2. Remove the component's target directory (config and Kubernetes only — not docker-compose), unless it overlaps a template source, which is the in-place case: clearing it would delete the templates about to be read, so existing files are left alone
-3. Scan source directory for files matching `files` patterns; an empty or absent `files` list processes everything
+3. Scan source directory for files matching `files` patterns; an empty or absent `files` list processes everything. A file named `secret.env` is skipped either way
 4. For files with `template.` prefix: render as Go template, strip the prefix from the file name only — the subdirectory is part of the output path
 5. For other files: copy as-is
 6. Default layer renders first, then environment layer overlays
@@ -301,11 +324,12 @@ A `files` pattern without a separator matches by base name at any depth, so
 `*.yaml` selects `sub/config.yaml` too. A pattern containing one is matched
 against the whole relative path, keeping `cert/*` scoped to `cert/`.
 
-Because step 1 wipes the target, generated output is always a clean reflection of
-the sources; stale files from a previous run never survive. `gopro generate
-docker-compose` is the exception — it renders into a shared directory rather than
-one named after a component, so it neither clears the target nor accepts an
-output flag.
+Because step 2 clears the target, config and Kubernetes output reflects only
+current sources, except for an in-place render. `gopro generate docker-compose`
+differs in steps 1 and 2: it has no output flag, writes to `docker_compose_tgt`
+(or the working directory when unset), and never clears it, because that
+directory is shared rather than named after a component. Output of a renamed or
+removed template stays there until deleted by hand.
 
 ## Template Functions Returning Image Names
 
