@@ -1,5 +1,8 @@
 # GoPro Configuration Reference
 
+`gopro schema` prints the JSON Schema of the installed gopro; where it and
+this reference disagree, the schema is right.
+
 ## project.yaml Complete Field Reference
 
 ### Top-Level Fields
@@ -40,13 +43,23 @@ gopro falls back to.
 | `docker_compose_src` | `""` | Docker Compose template source |
 | `docker_compose_tgt` | `""` | Docker Compose output directory (unset: the working directory); never cleared |
 
+### Component Names
+
+Every command that reads project.yaml first rejects, reporting all at once: a
+component name that is not a single path element (empty, `.`, `..`, or holding
+`/` or `\`), since it names files and directories and generation clears the
+component's target; a name defined twice in one section or listed twice in one
+list; a `binaries`/`images`/`configs`/`kubernetes_templates` entry, in `default`
+or any `env`, that names nothing defined; and a `$name` base naming no image.
+Defining a component without listing it is fine.
+
 ### Build Specification
 
 #### Binary Spec
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `name` | Yes | Binary name (must be listed in `binaries`) |
+| `name` | Yes | Binary name, a single path element; built only in environments whose `binaries` lists it |
 | `version` | No | Application's own version, injected as `ApplicationVersion` (default: the product version) |
 | `src` | No | Custom source path (default: `{binary_src}/{name}`) |
 | `config_dir` | No | Config directory path used in templates |
@@ -86,9 +99,9 @@ values in the build environment.
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `name` | Yes | Image name (must be listed in `images`) |
+| `name` | Yes | Image name, a single path element; built only in environments whose `images` lists it |
 | `build_from` | No | Pull and tag existing image instead of building |
-| `base` | No | Base image for Dockerfile (use `$name` to cross-reference) |
+| `base` | No | Base image for Dockerfile (use `$name` to cross-reference; the name must be defined in `build.images`) |
 | `build_src` | No | Dockerfile directory (default: `{image_build_src}/{name}`) |
 | `prefix` | No | Override `image_prefix` for this image |
 | `repo` | No | Override repository name (default: `name`) |
@@ -101,7 +114,7 @@ values in the build environment.
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `name` | Yes | Component name |
+| `name` | Yes | Component name, a single path element; generated only in environments whose `configs`/`kubernetes_templates` lists it |
 | `files` | No | Glob patterns for files to process (unset: every file). A `secret.env` is always skipped |
 
 **Docker Compose entry:**
@@ -140,6 +153,13 @@ docker build -t <image> [--no-cache] \
 `--no-cache` is passed unless `--cache` is given. The build context is always
 the project root, so a Dockerfile may `COPY` from anywhere in the repository.
 
+That includes every `secret.env` under `env/` unless an ignore file excludes it.
+Before each Dockerfile build gopro warns about each one left in the context,
+applying the patterns docker will: `<build_src>/Dockerfile.dockerignore` when
+it exists (BuildKit reads it instead of the root's), else `.dockerignore`. The
+build still runs. `gopro init` adds `**/secret.env` to `.dockerignore`; it does
+not exclude `bin/` or `dist/`, which Dockerfiles copy from.
+
 ## Image Tagging and Push
 
 Image references resolve as `[prefix/]repo:tag`, where `prefix` falls back to
@@ -151,6 +171,7 @@ Image references resolve as `[prefix/]repo:tag`, where `prefix` falls back to
 | `-p, --push` | Push after building; skipped for images with `no_push: true` |
 | `-l, --latest` | Additionally tag and push `:latest`. Requires `--push` — alone it warns and does nothing |
 | `--cache` | Use the docker layer cache; without it builds pass `--no-cache` |
+| `--dry-run` | Global: print each `docker` command, one per line, instead of running it; does the same for `build binary` and every `generate` subcommand |
 
 `--latest` resolves the second reference through the same prefix/repo logic, and
 skips the extra push when the image already builds as `:latest`. This replaces
@@ -317,7 +338,7 @@ vars on the binary spec and let `env.{name}` vary only what changes.
 3. Scan source directory for files matching `files` patterns; an empty or absent `files` list processes everything. A file named `secret.env` is skipped either way
 4. For files with `template.` prefix: render as Go template, strip the prefix from the file name only — the subdirectory is part of the output path
 5. For other files: copy as-is
-6. Default layer renders first, then environment layer overlays
+6. Default layer renders first, then environment layer overlays; when the environment does not set its own source, the two are one directory and it renders once
 7. Templates use `[[` `]]` delimiters, receive `{Name, Project, EnvName, Env}` context
 
 A `files` pattern without a separator matches by base name at any depth, so

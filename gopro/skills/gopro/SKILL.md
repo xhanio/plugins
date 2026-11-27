@@ -1,11 +1,11 @@
 ---
 name: gopro
 description: Use when a project has a project.yaml or uses the gopro command; when building Go binaries or Docker images across environments; when cross-compiling for multiple platforms or setting per-target build env; when generating config, Kubernetes, or Docker Compose templates; when scaffolding a Go project structure; or when handling secret.env and config.yaml in env/ directories.
-compatibility: Requires Go 1.24+, git, and optionally Docker. Install with go install github.com/xhanio/gopro@latest. Documents github.com/xhanio/gopro v0.1.12 — where the installed gopro differs, trust `gopro <command> --help` over this prose.
+compatibility: Requires Go 1.24+, git, and optionally Docker. Install with go install github.com/xhanio/gopro@latest. Documents github.com/xhanio/gopro v0.1.13 — where the installed gopro differs, trust `gopro <command> --help` over this prose.
 metadata:
   author: xhanio
-  version: "1.3.0" # mirrors plugin.json; bump both together
-  gopro: v0.1.12 # the tool version these docs describe
+  version: "1.4.0" # mirrors plugin.json; bump both together
+  gopro: v0.1.13 # the tool version these docs describe
 ---
 
 # GoPro - Go Project Generator and Build Tool
@@ -17,6 +17,7 @@ GoPro manages multi-environment Go projects through a single `project.yaml` conf
 | Task | Command |
 |------|---------|
 | Generate example config | `gopro example` |
+| Print the project.yaml JSON Schema | `gopro schema` |
 | Initialize project | `gopro init` |
 | Build binaries | `gopro build binary -e <env>` |
 | Build Docker images | `gopro build image -e <env> --push` |
@@ -32,6 +33,7 @@ GoPro manages multi-environment Go projects through a single `project.yaml` conf
 - `-e, --environment <name>` - Target environment (local, prod, or custom). Omitted (or `default`) = use `default` as-is; an undeclared name is an error
 - `-f, --filter <regex>` - Regex filter for selective component building (default: `.*`)
 - `-v, --verbose` - Debug output
+- `--dry-run` - `build` and `generate` print each command and file operation, one per line, and perform none; `init` and `example` refuse it
 
 ### Per-Command Flags
 
@@ -42,6 +44,13 @@ GoPro manages multi-environment Go projects through a single `project.yaml` conf
 - `gopro generate docker-compose`: no output flag; writes to `docker_compose_tgt`, which is never cleared first
 
 ## Configuration Structure
+
+**Before writing or editing `project.yaml`, run `gopro schema`.** It prints the
+JSON Schema of the installed gopro, the authority on which fields exist; the
+structure below is an overview. Validate what you write against it: the schema
+catches unknown fields, malformed names and formats, and gopro itself rejects
+a listed name that nothing defines when it loads the file. Keep the
+`# yaml-language-server: $schema=...` first line `gopro example` writes.
 
 The `project.yaml` file has four main sections:
 
@@ -254,6 +263,8 @@ The `secret.env` file exists **solely as a source for template rendering** — i
 secret.env
 ```
 
+**`secret.env` must also stay out of Docker images.** The build context is the project root, so every `secret.env` under `env/` is sent to docker unless `.dockerignore` excludes it, and a Dockerfile's `COPY . .` puts it in the image. `gopro init` adds `**/secret.env` to `.dockerignore`, and `gopro build image` warns about any `secret.env` left in the context. Do not exclude `bin/` or `dist/` there: Dockerfiles copy binaries and rendered config from them.
+
 In CI/CD or production pipelines, `secret.env` files should be provisioned from a secrets manager (Vault, AWS Secrets Manager, etc.) before running `gopro generate`, and discarded afterward.
 
 ## Template System
@@ -309,7 +320,7 @@ spec:
 
 The first step is always to design a proper `project.yaml` — this is the blueprint for the entire project. Define the project metadata (`product`, `module`, `version`), directory layout (`binary_src`, `config_src`, etc.), environments, build targets, and generate specs before running anything. Use `gopro example` to generate a reference template, then customize it to match the project's needs.
 
-Once `project.yaml` is ready, run `gopro init` to scaffold the project. This creates all the directories defined in the config (binary source, image build, environment config/kubernetes/docker-compose dirs) and initializes `go.mod` and git.
+Once `project.yaml` is ready, run `gopro init` to scaffold the project. This creates all the directories defined in the config (binary source, image build, environment config/kubernetes/docker-compose dirs), initializes `go.mod` and git, and writes the `.gitignore` and `.dockerignore` entries that keep `secret.env` out of git and out of images.
 
 ```bash
 # Step 1: Design project.yaml first (use example as a starting point)
@@ -361,6 +372,20 @@ gopro build image -e prod --push --latest
 The extra tag is skipped when the image already builds as `:latest`, so nothing
 is pushed twice. `--latest` requires `--push`; alone it warns and does nothing.
 Images with `no_push: true` are skipped entirely.
+
+### Check Before Changing Anything
+
+Run the command with `--dry-run` first whenever it would push images, clear an
+output directory, or when you changed build settings and want to see their
+effect. It prints each operation on its own line — `go build` and `docker`
+commands with the environment gopro adds, then `rm -rf`, `mkdir -p`, `render`
+and `cp` for files — and performs none. It still loads and validates
+`project.yaml` and renders templates, so it fails where the real run would.
+
+```bash
+gopro build image -e prod --push --latest --dry-run   # what would be built, tagged and pushed
+gopro generate config -e prod --dry-run              # what would be cleared and written
+```
 
 ### Generate Dependencies Order
 
@@ -451,4 +476,7 @@ matching field. See `references/REFERENCE.md` for where every value comes from.
 - **`unknown environment "x"`**: `-e` names an environment not declared under `env:`. Nothing falls back to `default`
 - **`build args may not set ...` / `build args take flags only`**: `-o`, `-X` on the framingo `info` package, and positional arguments are reserved for gopro in `binary_build_args`/`build_args`/`args`. `image build args may not set ...` is the same rule for `-t`, `-f` and the four injected `--build-arg`s in `image_build_args`
 - **`gopro init` stops at `go mod init`**: `module` is unset and there is no `go.mod`. Set `module` in `project.yaml`
+- **`project.yaml is invalid`**: a component name is not a single path element (empty, `.`, `..`, or holding `/`), is defined or listed twice, or a `binaries`/`images`/`configs`/`kubernetes_templates` entry or a `$name` base names nothing defined. Every problem is listed; defining a component without listing it is fine
+- **`the build context includes .../secret.env`**: `.dockerignore` (or the Dockerfile's own `Dockerfile.dockerignore`) does not exclude it, so `docker build` receives it. Add `**/secret.env`; `gopro init` does
+- **A command waits for input / fails asking for credentials**: gopro gives the commands it runs no stdin. Run `docker login` before `gopro build image --push`
 - Use `-v` (verbose) flag on any command for detailed debug output; it prints the resolved build env and command line
